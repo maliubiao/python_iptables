@@ -1,3 +1,4 @@
+#include <Python.h>
 /* user headers */
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,7 +50,7 @@ iptables_get_entries(const char *tablename)
 				IPT_SO_GET_INFO, &info, &s) < 0) {
 		goto ERROR; 
 	} 
-	entries = malloc(sizeof(struct ipt_get_entries) + info.size);
+	entries = PyMem_Malloc(sizeof(struct ipt_get_entries) + info.size);
 	if (!entries)
 		goto ERROR;
 	entries->size = info.size; 
@@ -61,10 +62,13 @@ iptables_get_entries(const char *tablename)
 	close(sockfd);
 	return entries; 
 ERROR:	
+	if entries:
+		PyMem_Free(entries);
 	close(sockfd); 
 	return NULL;
 }
 
+/* gdb debug */
 int main(int argc, char **argv) {
 	iptables_get_entries("raw");
 	return 0;
