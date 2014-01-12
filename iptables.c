@@ -24,11 +24,61 @@ static const char *hooknames[] = {
 	[HOOK_POST_ROUTING]	= "POSTROUTING",
 };
 
+static int 
+add_entry(struct ipt_entry, PyObject *table_dict, 
+		struct ipt_getinfo *info, struct ipt_get_entries *entries)
+{
+	
+}
+
+static PyObject *
+parse_entries(struct ipt_getinfo *info, struct ipt_get_entries *entries)
+{
+	PyObbject *table_dict;
+	PyObject *hooks_dict;
+	PyObject *underflows_dict; 
+	table_dict = PyDict_New();
+	PyDict_SetItemString(table_dict, "version",
+			PyString_FromString(XTABLES_VERSION));		
+	PyDict_SetItemString(table_dict, "blobsize",
+			PyInt_FromLong(entries->size));
+	PyDict_SetItemString(table_dict, "tablename",
+			PyString_FromString(info->name)); 
+	hooks_dict = PyDict_New();			
+	PyDict_SetItemString(hooks_dict, "pre",
+			PyInt_FromLong(info->hook_entry[HOOK_PRE_ROUTING]));
+	PyDict_SetItemString(hooks_dict, "in",
+			PyInt_FromLong(info->hook_entry[HOOK_LOCAL_IN]));
+	PyDict_SetItemString(hooks_dict, "fwd",
+			PyInt_FromLong(info->hook_entry[HOOK_FORWARD]));
+	PyDict_SetItemString(hooks_dict, "out",
+			PyInt_FromLong(info->hook_entry[HOOK_LOCAL_OUT]));
+	PyDict_SetItemString(hooks_dict, "post",
+			PyInt_FromLong(info->hook_entry[HOOK_POST_ROUTING]));
+	underflows_dict = PyDict_New();
+	PyDict_SetItemString(hooks_dict, "pre",
+			PyInt_FromLong(info->underflow[HOOK_PRE_ROUTING]));
+	PyDict_SetItemString(hooks_dict, "in",
+			PyInt_FromLong(info->underflow[HOOK_LOCAL_IN]));
+	PyDict_SetItemString(hooks_dict, "fwd",
+			PyInt_FromLong(info->underflow[HOOK_FORWARD]));
+	PyDict_SetItemString(hooks_dict, "out",
+			PyInt_FromLong(info->underflow[HOOK_LOCAL_OUT]));
+	PyDict_SetItemString(hooks_dict, "post",
+			PyInt_FromLong(info->underflow[HOOK_POST_ROUTING]));
+	PyDict_SetItemString(table_dict, "hooks", hooks_dict);
+	PyDict_SetItemString(table_dict, "underflows", underflows_dict); 
+
+	XT_MATCH_ITERATE(struct ipt_entry, entries->entrytable,
+			entries->size, add_entry,
+			hooks_dict, info, entries);
+
+} 
 
 static struct ipt_get_entries *
 iptables_get_entries(const char *tablename)
 { 
-	struct ipt_getinfo info;
+	struct ipt_getinfo *info;
 	struct ipt_get_entries *entries;
 	unsigned int tmp;
 	socklen_t s;
@@ -44,24 +94,29 @@ iptables_get_entries(const char *tablename)
 				strerror(errno));
 		abort();
 	}
+	info = PyMem_Malloc(sizeof(struct ipt_getinfo));
+	if (!info)
+		goto ERROR; 
 	s = sizeof(info);
-	strcpy(info.name, tablename);
+	strcpy(info->name, tablename);
 	if (getsockopt(sockfd, IPPROTO_IP,
-				IPT_SO_GET_INFO, &info, &s) < 0) {
+				IPT_SO_GET_INFO, info, &s) < 0) {
 		goto ERROR; 
 	} 
-	entries = PyMem_Malloc(sizeof(struct ipt_get_entries) + info.size);
+	entries = PyMem_Malloc(sizeof(struct ipt_get_entries) + info->size);
 	if (!entries)
 		goto ERROR;
-	entries->size = info.size; 
-	strcpy(entries->name, info.name);
-	tmp = sizeof(struct ipt_get_entries) + info.size;
+	entries->size = info->size; 
+	strcpy(entries->name, info->name);
+	tmp = sizeof(struct ipt_get_entries) + info->size;
 	if (getsockopt(sockfd, IPPROTO_IP,
 				IPT_SO_GET_ENTRIES, entries, &tmp) < 0) 
 		goto ERROR;
-	close(sockfd);
-	return entries; 
+	close(sockfd); 
+	return parse_entries(info, entries); 
 ERROR:	
+	if info:
+		PyMem_Free(info);
 	if entries:
 		PyMem_Free(entries);
 	close(sockfd); 
