@@ -16,6 +16,8 @@
 #include <linux/netfilter/x_tables.h>
 #include <linux/netfilter_ipv4/ip_tables.h>
 
+#define XTABLES_VERSION "9"
+
 #define IP_PARTS_NATIVE(n)			\
 (unsigned int)((n)>>24)&0xFF,			\
 (unsigned int)((n)>>16)&0xFF,			\
@@ -23,6 +25,12 @@
 (unsigned int)((n)&0xFF)
 
 #define IP_PARTS(n) IP_PARTS_NATIVE(ntohl(n)) 
+
+#define HOOK_PRE_ROUTING	NF_IP_PRE_ROUTING
+#define HOOK_LOCAL_IN		NF_IP_LOCAL_IN
+#define HOOK_FORWARD		NF_IP_FORWARD
+#define HOOK_LOCAL_OUT		NF_IP_LOCAL_OUT
+#define HOOK_POST_ROUTING	NF_IP_POST_ROUTING 
 
 static const char *hooknames[] = {
 	[HOOK_PRE_ROUTING]	= "PREROUTING",
@@ -33,13 +41,14 @@ static const char *hooknames[] = {
 };
 
 static inline int 
-add_matches(struct ipt_entry *e, PyObject *matches_list)
-{
-	return PyList_Append(matches_list, e);
+add_matches(struct xt_entry_match *m, PyObject *matches_list)
+{ 
+	return PyList_Append(matches_list,
+			PyString_FromString(m->u.user.name)) ? 1 : 0; 
 }
 
 static int 
-add_entry(struct ipt_entry e, PyObject *table_dict, 
+add_entry(struct ipt_entry *e, PyObject *rules_list, 
 		struct ipt_getinfo *info, struct ipt_get_entries *entries)
 {
 	size_t i;	
@@ -50,7 +59,7 @@ add_entry(struct ipt_entry e, PyObject *table_dict,
 	PyObject *matches_list;
 	memset(iniface_buffer, 0, IFNAMSIZ+1);
 	memset(outiface_buffer, 0, IFNAMSIZ+1);
-	rule_dict = PyDict_New()
+	rule_dict = PyDict_New();
 	PyDict_SetItemString(rule_dict, "srcip",
 			PyInt_FromLong(e->ip.src.s_addr));
 	PyDict_SetItemString(rule_dict, "srcip_mask",
@@ -70,7 +79,7 @@ add_entry(struct ipt_entry e, PyObject *table_dict,
 	PyDict_SetItemString(rule_dict, "outiface",
 			PyString_FromString(e->ip.outiface));
 	PyDict_SetItemString(rule_dict, "outiface_mask",
-			PyString_FromString(outiface_mask));
+			PyString_FromString(outiface_buffer));
 	PyDict_SetItemString(rule_dict, "protocol",
 			PyInt_FromLong(e->ip.proto));
 	PyDict_SetItemString(rule_dict, "flags",
@@ -91,36 +100,45 @@ add_entry(struct ipt_entry e, PyObject *table_dict,
 	PyDict_SetItemString(rule_dict, "matches", matches_list); 
 
 	t = (void *)e + e->target_offset;
-	PyDict_SetItemString(rule_dict, "target_name", t->u.user.name);
-	PyDict_SetItemString(rule_dict, "target_size", t->u.target_size);
-	if (strcmp(t->u.user.name, STANDARD_TARGET) == 0) {
+	PyDict_SetItemString(rule_dict, "target_name",
+			PyString_FromString(t->u.user.name));
+	PyDict_SetItemString(rule_dict, "target_size",
+			PyInt_FromLong(t->u.target_size));
+
+	if (strcmp(t->u.user.name, XT_STANDARD_TARGET) == 0) {
 		const unsigned char *data = t->data;
 		int pos = *(const int *)data;
 		if (pos < 0) {
 			PyDict_SetItemString(rule_dict, "verdict",
 				PyString_FromString(
-					pos == -NF_ACCEPT-1 ? "NF_ACCEPT"
-					: pos == -NF_DROP-1 ? "NF_DROP"
-					: pos == -NF_QUEUE-1 ? "NF_QUEUE"
-					: pos == RETURN ? "RETURN"
+					pos == -NF_ACCEPT-1 ? "ACCEPT"
+					: pos == -NF_DROP-1 ? "DROP"
+					: pos == -NF_QUEUE-1 ?"QUEUE"
+					: pos == XT_RETURN ? "RETURN"
 					: "UNKNOWN"));
-		else
+		}
+		else {
 			PyDict_SetItemString(rule_dict, "verdict",
 					PyInt_FromLong(pos));
 		}
+	} else if (strcmp(t->u.user.name, XT_ERROR_TARGET) == 0) {
+		PyDict_SetItemString(rule_dict, "error",	
+				PyString_FromString((char *)t->data)); 
 	}
-	return 0;
+	
+	return PyList_Append(rules_list, rule_dict) ? 1 : 0;
 
 }
 
 static PyObject *
 parse_entries(struct ipt_getinfo *info, struct ipt_get_entries *entries)
 {
-	PyObbject *table_dict;
+	PyObject *table_dict;
 	PyObject *hooks_dict;
 	PyObject *underflows_dict; 
+	PyObject *rules_list;
 	table_dict = PyDict_New();
-	PyDict_SetItemString(table_dict, "version",
+	PyDict_SetItemString(table_dict, "iptables_protocol_version",
 			PyString_FromString(XTABLES_VERSION));		
 	PyDict_SetItemString(table_dict, "blobsize",
 			PyInt_FromLong(entries->size));
@@ -138,33 +156,43 @@ parse_entries(struct ipt_getinfo *info, struct ipt_get_entries *entries)
 	PyDict_SetItemString(hooks_dict, "post",
 			PyInt_FromLong(info->hook_entry[HOOK_POST_ROUTING]));
 	underflows_dict = PyDict_New();
-	PyDict_SetItemString(hooks_dict, "pre",
+	PyDict_SetItemString(underflows_dict, "pre",
 			PyInt_FromLong(info->underflow[HOOK_PRE_ROUTING]));
-	PyDict_SetItemString(hooks_dict, "in",
+	PyDict_SetItemString(underflows_dict, "in",
 			PyInt_FromLong(info->underflow[HOOK_LOCAL_IN]));
-	PyDict_SetItemString(hooks_dict, "fwd",
+	PyDict_SetItemString(underflows_dict, "fwd",
 			PyInt_FromLong(info->underflow[HOOK_FORWARD]));
-	PyDict_SetItemString(hooks_dict, "out",
+	PyDict_SetItemString(underflows_dict, "out",
 			PyInt_FromLong(info->underflow[HOOK_LOCAL_OUT]));
-	PyDict_SetItemString(hooks_dict, "post",
-			PyInt_FromLong(info->underflow[HOOK_POST_ROUTING]));
+	PyDict_SetItemString(underflows_dict, "post",
+			PyInt_FromLong(info->underflow[HOOK_POST_ROUTING])); 
 	PyDict_SetItemString(table_dict, "hooks", hooks_dict);
 	PyDict_SetItemString(table_dict, "underflows", underflows_dict); 
-	
-	XT_MATCH_ITERATE(struct ipt_entry, entries->entrytable,
+
+	rules_list = PyList_New(0);
+	XT_ENTRY_ITERATE(struct ipt_entry, entries->entrytable,
 			entries->size, add_entry,
-			table_dict, info, entries);
+			rules_list, info, entries);
+	PyDict_SetItemString(table_dict, "rules", rules_list);
+	return table_dict;
 
 } 
 
-static struct ipt_get_entries *
-iptables_get_entries(const char *tablename)
+PyDoc_STRVAR(iptables_get_entries_doc, "get entries of a table");
+
+static PyObject *
+iptables_get_entries(PyObject *object, PyObject *args)
 { 
 	struct ipt_getinfo *info;
 	struct ipt_get_entries *entries;
-	unsigned int tmp;
+	char *tablename; 
 	socklen_t s;
-	int sockfd;
+	int sockfd; 
+	unsigned int tmp; 
+
+	if (!PyArg_ParseTuple(args, "s:get_entries", &tablename)) {
+		return NULL;
+	} 
 	if (strlen(tablename) >= XT_TABLE_MAXNAMELEN) { 
 		return NULL;
 	}
@@ -176,38 +204,52 @@ iptables_get_entries(const char *tablename)
 				strerror(errno));
 		abort();
 	}
-	info = PyMem_Malloc(sizeof(struct ipt_getinfo));
+	info = PyMem_Malloc(sizeof(struct ipt_getinfo)); 
 	if (!info)
 		goto ERROR; 
-	s = sizeof(info);
+	s = sizeof(struct ipt_getinfo);
+	memset(info, 0, s);
 	strcpy(info->name, tablename);
 	if (getsockopt(sockfd, IPPROTO_IP,
 				IPT_SO_GET_INFO, info, &s) < 0) {
+		PyErr_SetFromErrno(PyExc_OSError);
+		PyMem_Free(info);
 		goto ERROR; 
 	} 
 	entries = PyMem_Malloc(sizeof(struct ipt_get_entries) + info->size);
-	if (!entries)
+	if (!entries) {
+		PyMem_Free(info);
 		goto ERROR;
+	}
 	entries->size = info->size; 
 	strcpy(entries->name, info->name);
 	tmp = sizeof(struct ipt_get_entries) + info->size;
 	if (getsockopt(sockfd, IPPROTO_IP,
-				IPT_SO_GET_ENTRIES, entries, &tmp) < 0) 
+				IPT_SO_GET_ENTRIES, entries, &tmp) < 0) {
+		PyErr_SetFromErrno(PyExc_OSError);	
+		PyMem_Free(info);
+		PyMem_Free(entries);
 		goto ERROR;
+	}
 	close(sockfd); 
 	return parse_entries(info, entries); 
 ERROR:	
-	if info:
-		PyMem_Free(info);
-	if entries:
-		PyMem_Free(entries);
 	close(sockfd); 
 	return NULL;
 }
 
-/* gdb debug */
-int main(int argc, char **argv) {
-	iptables_get_entries("raw");
-	return 0;
-}
 
+
+static PyMethodDef iptables_methods[] = {
+	{"get_entries", (PyCFunction)iptables_get_entries,
+		METH_VARARGS, iptables_get_entries_doc},
+	{NULL, NULL, 0, NULL}
+};
+
+PyMODINIT_FUNC initiptables(void)
+{
+	PyObject *m;
+	m = Py_InitModule("iptables", iptables_methods);
+	if (m != NULL) {
+	}
+}
