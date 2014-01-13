@@ -40,7 +40,33 @@ static const char *hooknames[] = {
 	[HOOK_POST_ROUTING]	= "POSTROUTING",
 };
 
-static inline int 
+
+static struct ipt_entry *
+offset_get_entry(struct ipt_get_entries *entries, unsigned int offset)
+{
+	return (struct ipt_entry *)((char*)entries->entrytable + offset);
+}
+
+/*
+ * maybe a predefined chain, aka hook.
+ */
+static unsigned int 
+entry_is_hook_entry(struct ipt_entry *e, struct ipt_getinfo *info,
+		struct ipt_get_entries *entries)
+{
+	unsigned int i;
+	for (i = 0; i < NF_IP_NUMHOOKS; i++) {
+		if ((info->valid_hooks & (1 << i))
+			&& offset_get_entry(entries,
+				info->hook_entry[i]) == e) { 
+			return i+1;
+		}
+	}
+	return 0;
+}
+
+
+static int 
 add_matches(struct xt_entry_match *m, PyObject *matches_list)
 { 
 	return PyList_Append(matches_list,
@@ -48,17 +74,27 @@ add_matches(struct xt_entry_match *m, PyObject *matches_list)
 }
 
 static int 
-add_entry(struct ipt_entry *e, PyObject *rules_list, 
-		struct ipt_getinfo *info, struct ipt_get_entries *entries)
+add_entry(struct ipt_entry *e, PyObject *chains_dict,
+		PyObject **current_chain_ptr,
+		struct ipt_getinfo *info,
+		struct ipt_get_entries *entries)
 {
 	size_t i;	
+	unsigned int builtin;
 	struct xt_entry_target *t; 
 	char iniface_buffer[IFNAMSIZ+1];
 	char outiface_buffer[IFNAMSIZ+1];
 	PyObject *rule_dict;
-	PyObject *matches_list;
+	PyObject *matches_list; 
+
 	memset(iniface_buffer, 0, IFNAMSIZ+1);
 	memset(outiface_buffer, 0, IFNAMSIZ+1);
+	if ((unsigned long)((void *)e - (void *)entries->entrytable)
+			+ e->next_offset == entries->size) {
+		/* last one, policy rule do nothing*/	
+		return 0;
+	}
+	/* rule data */
 	rule_dict = PyDict_New();
 	PyDict_SetItemString(rule_dict, "srcip",
 			PyInt_FromLong(e->ip.src.s_addr));
@@ -94,17 +130,29 @@ add_entry(struct ipt_entry *e, PyObject *rules_list,
 				(unsigned long long)e->counters.bcnt));
 	PyDict_SetItemString(rule_dict, "cache",
 			PyInt_FromLong(e->nfcache));
-
+	/* matches */
 	matches_list = PyList_New(0); 
 	XT_MATCH_ITERATE(struct ipt_entry, e, add_matches, matches_list); 
 	PyDict_SetItemString(rule_dict, "matches", matches_list); 
-
+	/* target */
 	t = (void *)e + e->target_offset;
 	PyDict_SetItemString(rule_dict, "target_name",
 			PyString_FromString(t->u.user.name));
 	PyDict_SetItemString(rule_dict, "target_size",
-			PyInt_FromLong(t->u.target_size));
-
+			PyInt_FromLong(t->u.target_size)); 
+	/* new chain */ 
+	if (strcmp(t->u.user.name, XT_ERROR_TARGET) == 0) {
+		/* new user defined chain */
+		*current_chain_ptr = PyList_New(0);
+		PyDict_SetItemString(chains_dict, (char *)t->data,
+				*current_chain_ptr); 
+	} else if ((builtin = entry_is_hook_entry(e, info, entries)) != 0) {
+		*current_chain_ptr = PyList_New(0);
+		PyDict_SetItemString(chains_dict,
+				(char *)hooknames[builtin-1],
+				*current_chain_ptr);
+	} 
+	/* target */
 	if (strcmp(t->u.user.name, XT_STANDARD_TARGET) == 0) {
 		const unsigned char *data = t->data;
 		int pos = *(const int *)data;
@@ -121,12 +169,12 @@ add_entry(struct ipt_entry *e, PyObject *rules_list,
 			PyDict_SetItemString(rule_dict, "verdict",
 					PyInt_FromLong(pos));
 		}
-	} else if (strcmp(t->u.user.name, XT_ERROR_TARGET) == 0) {
-		PyDict_SetItemString(rule_dict, "error",	
-				PyString_FromString((char *)t->data)); 
-	}
-	
-	return PyList_Append(rules_list, rule_dict) ? 1 : 0;
+	} 
+	/* add rule to current_chain */
+	if (*current_chain_ptr) 
+		return PyList_Append(*current_chain_ptr, rule_dict) ? 1 : 0; 
+	else
+		return 1;
 
 }
 
@@ -136,7 +184,9 @@ parse_entries(struct ipt_getinfo *info, struct ipt_get_entries *entries)
 	PyObject *table_dict;
 	PyObject *hooks_dict;
 	PyObject *underflows_dict; 
-	PyObject *rules_list;
+	PyObject *chains_dict;
+	PyObject *current_chain = NULL;
+
 	table_dict = PyDict_New();
 	PyDict_SetItemString(table_dict, "iptables_protocol_version",
 			PyString_FromString(XTABLES_VERSION));		
@@ -169,11 +219,21 @@ parse_entries(struct ipt_getinfo *info, struct ipt_get_entries *entries)
 	PyDict_SetItemString(table_dict, "hooks", hooks_dict);
 	PyDict_SetItemString(table_dict, "underflows", underflows_dict); 
 
-	rules_list = PyList_New(0);
-	XT_ENTRY_ITERATE(struct ipt_entry, entries->entrytable,
-			entries->size, add_entry,
-			rules_list, info, entries);
-	PyDict_SetItemString(table_dict, "rules", rules_list);
+	chains_dict = PyDict_New();
+	
+	unsigned int i, ret; 
+	struct ipt_entry *entry;
+
+	for (i = 0;i < entries->size;
+			i += entry->next_offset) {
+		entry = (void *)(entries->entrytable) + i; 
+		ret = add_entry(entry, chains_dict,
+				&current_chain, info, entries); 
+		if (ret != 0)
+			break;
+	}
+
+	PyDict_SetItemString(table_dict, "chains", chains_dict);
 	return table_dict;
 
 } 
@@ -197,12 +257,13 @@ iptables_get_entries(PyObject *object, PyObject *args)
 		return NULL;
 	}
 	sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
-	if (sockfd < 0)
+	if (sockfd < 0) {
+		PyErr_SetFromErrno(PyExc_OSError);
 		return NULL;
+	}
 	if (fcntl(sockfd, F_SETFD, FD_CLOEXEC) == -1) {
-		fprintf(stderr, "Could not set close on exec: %s\n",
-				strerror(errno));
-		abort();
+		PyErr_SetFromErrno(PyExc_OSError);
+		return NULL;
 	}
 	info = PyMem_Malloc(sizeof(struct ipt_getinfo)); 
 	if (!info)
