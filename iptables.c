@@ -56,20 +56,6 @@ struct ip_conntrack_old_tuple {
 	} dst;
 };
 
-struct xt_conntrack_info {
-	unsigned int statemask, statusmask;
-
-	struct ip_conntrack_old_tuple tuple[IP_CT_DIR_MAX];
-	struct in_addr sipmsk[IP_CT_DIR_MAX], dipmsk[IP_CT_DIR_MAX];
-
-	unsigned long expires_min, expires_max;
-
-	/* Flags word */
-	uint8_t flags;
-	/* Inverse flags */
-	uint8_t invflags;
-};
-
 
 static const char *hooknames[] = {
 	[HOOK_PRE_ROUTING]	= "PREROUTING",
@@ -109,16 +95,17 @@ static int
 add_matches(struct xt_entry_match *m, PyObject *matches_dict)
 { 
     PyObject *match_dict = NULL; 
+        match_dict = PyDict_New();  
+	PyDict_SetItemString(match_dict, "size",
+			PyInt_FromLong(m->u.user.match_size));
     if (strcmp(m->u.user.name, "pkttype") == 0) {
-        struct xt_pkttype_info *info  = (struct xt_pkttype_info *)m->data;
-        match_dict = PyDict_New();
+        struct xt_pkttype_info *info  = (struct xt_pkttype_info *)m->data; 
         PyDict_SetItemString(match_dict, "type",
                 PyInt_FromLong(info->pkttype));
         PyDict_SetItemString(match_dict, "invert",
                 PyInt_FromLong(info->invert));
     } else if (strcmp(m->u.user.name, "tcp") == 0) { 
         struct xt_tcp *tcpinfo = (struct xt_tcp *)m->data;        
-        match_dict = PyDict_New();  
         PyDict_SetItemString(match_dict, "spts",
                 PyTuple_Pack(2, PyInt_FromLong(tcpinfo->spts[0]),
                     PyInt_FromLong(tcpinfo->spts[1])));
@@ -134,68 +121,67 @@ add_matches(struct xt_entry_match *m, PyObject *matches_dict)
         PyDict_SetItemString(match_dict, "invflags",
                 PyInt_FromLong(tcpinfo->invflags)); 
     } else if (strcmp(m->u.user.name, "conntrack") == 0) {
-        struct xt_conntrack_info *info = (struct xt_conntrack_info *)m->data;
-        match_dict = PyDict_New();
-        if (info->flags & XT_CONNTRACK_STATE) { 
-            PyDict_SetItemString(match_dict, "state",
-                    PyInt_FromLong(info->statemask));
-        }
-        if (info->flags & XT_CONNTRACK_STATUS) {
-            PyDict_SetItemString(match_dict, "status",
-                    PyInt_FromLong(info->statusmask));
-        }
-        if (info->flags & XT_CONNTRACK_EXPIRES) {
-            PyDict_SetItemString(match_dict, "expires_min", 
-                    PyInt_FromLong(info->expires_min));
-            PyDict_SetItemString(match_dict, "expires_max",
-                    PyInt_FromLong(info->expires_max));
-        } 
-	if (info->flags & XT_CONNTRACK_ORIGSRC) {
-		PyDict_SetItemString(match_dict, "origsrc_ip",		
-				PyString_FromStringAndSize(
-					(void *)&((struct in_addr *)&info->tuple[IP_CT_DIR_ORIGINAL].src.ip)->s_addr, 4));
-		PyDict_SetItemString(match_dict, "origsrc_mask",
-				PyString_FromStringAndSize(
-					(void *)&(((struct in_addr *)&info->sipmsk[IP_CT_DIR_ORIGINAL])->s_addr), 4)); 
-	} 
-	if (info->flags & XT_CONNTRACK_ORIGDST) {
-		PyDict_SetItemString(match_dict, "origdst_ip",
-				PyString_FromStringAndSize(
-					(void *)&((struct in_addr *)&info->tuple[IP_CT_DIR_ORIGINAL].dst.ip)->s_addr, 4));
-		PyDict_SetItemString(match_dict, "origdst_mask",
-				PyString_FromStringAndSize(
-					(void *)&(((struct in_addr *)&info->dipmsk[IP_CT_DIR_ORIGINAL])->s_addr), 4));
-	} 
-	if (info->flags & XT_CONNTRACK_REPLSRC) {
-		PyDict_SetItemString(match_dict, "replsrc_ip",
-				PyString_FromStringAndSize(
-					(void *)&((struct in_addr *)&info->tuple[IP_CT_DIR_REPLY].src.ip)->s_addr, 4));
-		PyDict_SetItemString(match_dict, "replsrc_mask",
-				PyString_FromStringAndSize(
-					(void *)&(((struct in_addr *)&info->sipmsk[IP_CT_DIR_REPLY])->s_addr), 4));
+	    if (m->u.user.revision == 3) {
+		struct xt_conntrack_mtinfo3 *info = (void *)m->data; 
+		
+		if (info->match_flags & XT_CONNTRACK_STATE) { 
+		    PyDict_SetItemString(match_dict, "state",
+			    PyInt_FromLong(info->state_mask));
+		}
+		if (info->match_flags & XT_CONNTRACK_STATUS) {
+		    PyDict_SetItemString(match_dict, "status",
+			    PyInt_FromLong(info->status_mask));
+		}
+		if (info->match_flags & XT_CONNTRACK_EXPIRES) {
+		    PyDict_SetItemString(match_dict, "expires_min", 
+			    PyInt_FromLong(info->expires_min));
+		    PyDict_SetItemString(match_dict, "expires_max",
+			    PyInt_FromLong(info->expires_max));
+		} 
+		if (info->match_flags & XT_CONNTRACK_ORIGSRC) {
+			PyDict_SetItemString(match_dict, "origsrc_ip",
+					PyString_FromStringAndSize(
+						(void *)&((struct in_addr *)&info->origsrc_addr.in)->s_addr, 4));
+			PyDict_SetItemString(match_dict, "origsrc_mask",
+					PyString_FromStringAndSize(
+						(void *)&(((struct in_addr *)&info->origsrc_mask.in)->s_addr), 4)); 
+		} 
+		if (info->match_flags & XT_CONNTRACK_ORIGDST) {
+			PyDict_SetItemString(match_dict, "origdst_ip",
+					PyString_FromStringAndSize(
+						(void *)&((struct in_addr *)&info->origdst_addr.in)->s_addr, 4));
+			PyDict_SetItemString(match_dict, "origdst_mask",
+					PyString_FromStringAndSize(
+						(void *)&(((struct in_addr *)&info->origdst_mask.in)->s_addr), 4));
+		} 
+		if (info->match_flags & XT_CONNTRACK_REPLSRC) {
+			PyDict_SetItemString(match_dict, "replsrc_ip",
+					PyString_FromStringAndSize(
+						(void *)&((struct in_addr *)&info->replsrc_addr.in)->s_addr, 4));
+			PyDict_SetItemString(match_dict, "replsrc_mask",
+					PyString_FromStringAndSize(
+						(void *)&(((struct in_addr *)&info->replsrc_mask.in)->s_addr), 4)); 
+		} 
 
-	} 
-	if (info->flags & XT_CONNTRACK_REPLDST) {
-		PyDict_SetItemString(match_dict, "repldst_ip",
-				PyString_FromStringAndSize(
-					(void *)&((struct in_addr *)&info->tuple[IP_CT_DIR_REPLY].dst.ip)->s_addr, 4));
-		PyDict_SetItemString(match_dict, "repldst_mask",
-				PyString_FromStringAndSize(
-					(void *)&(((struct in_addr *)&info->dipmsk[IP_CT_DIR_REPLY])->s_addr), 4));
-
-	} 
-        PyDict_SetItemString(match_dict, "invflags",
-                PyInt_FromLong(info->invflags)); 
+		if (info->match_flags & XT_CONNTRACK_REPLDST) {
+			PyDict_SetItemString(match_dict, "repldst_ip",
+					PyString_FromStringAndSize(
+						(void *)&((struct in_addr *)&info->repldst_addr.in)->s_addr, 4));
+			PyDict_SetItemString(match_dict, "repldst_mask",
+					PyString_FromStringAndSize(
+						(void *)&(((struct in_addr *)&info->repldst_mask.in)->s_addr), 4)); 
+		} 
+		PyDict_SetItemString(match_dict, "invflags",
+			PyInt_FromLong(info->invert_flags)); 
+	}	
     } else if (strcmp(m->u.user.name, "limit") == 0) {
-        struct xt_rateinfo *r =(struct xt_rateinfo *)m->data;
-        match_dict = PyDict_New();
+        struct xt_rateinfo *r =(struct xt_rateinfo *)m->data; 
         PyDict_SetItemString(match_dict, "avg",
                 PyInt_FromLong(r->avg));
         PyDict_SetItemString(match_dict, "burst",
                 PyInt_FromLong(r->burst));
     } else if (strcmp(m->u.user.name, "icmp") == 0) {
-        struct ipt_icmp *icmpinfo = (struct ipt_icmp *)m->data;
-        match_dict = PyDict_New();
+        struct ipt_icmp *icmpinfo = (struct ipt_icmp *)m->data; 
         PyDict_SetItemString(match_dict, "type",
                 PyInt_FromLong(icmpinfo->type));
         PyDict_SetItemString(match_dict, "min",
@@ -206,12 +192,10 @@ add_matches(struct xt_entry_match *m, PyObject *matches_dict)
                 PyInt_FromLong(icmpinfo->invflags));
     } 
 
-    if (match_dict) 
-        PyDict_SetItemString(matches_dict, m->u.user.name,
+
+	PyDict_SetItemString(matches_dict, m->u.user.name,
                     match_dict); 
-    else
-        PyDict_SetItemString(matches_dict, m->u.user.name, 
-                PyString_FromString("unknown"));
+
     return 0;
 }
 
@@ -326,7 +310,7 @@ parse_entries(struct ipt_getinfo *info, struct ipt_get_entries *entries)
 	PyObject *current_chain = NULL;
 
 	table_dict = PyDict_New();
-	PyDict_SetItemString(table_dict, "iptables_protocol_version",
+	PyDict_SetItemString(table_dict, "iptver",
 			PyString_FromString(XTABLES_VERSION));		
 	PyDict_SetItemString(table_dict, "blobsize",
 			PyInt_FromLong(entries->size));
