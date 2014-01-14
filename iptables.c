@@ -14,6 +14,10 @@
 #include <linux/types.h>
 #include <linux/netfilter.h>
 #include <linux/netfilter/x_tables.h>
+#include <linux/netfilter/nf_conntrack_tuple_common.h>
+#include <linux/netfilter/xt_pkttype.h>
+#include <linux/netfilter/xt_conntrack.h>
+#include <linux/netfilter/xt_limit.h>
 #include <linux/netfilter_ipv4/ip_tables.h>
 
 #define XTABLES_VERSION "9"
@@ -31,6 +35,40 @@
 #define HOOK_FORWARD		NF_IP_FORWARD
 #define HOOK_LOCAL_OUT		NF_IP_LOCAL_OUT
 #define HOOK_POST_ROUTING	NF_IP_POST_ROUTING 
+
+struct ip_conntrack_old_tuple {
+	struct {
+		__be32 ip;
+		union {
+			__u16 all;
+		} u;
+	} src;
+
+	struct {
+		__be32 ip;
+		union {
+			__u16 all;
+		} u;
+
+		/* The protocol. */
+		__u16 protonum;
+	} dst;
+};
+
+struct xt_conntrack_info {
+	unsigned int statemask, statusmask;
+
+	struct ip_conntrack_old_tuple tuple[IP_CT_DIR_MAX];
+	struct in_addr sipmsk[IP_CT_DIR_MAX], dipmsk[IP_CT_DIR_MAX];
+
+	unsigned long expires_min, expires_max;
+
+	/* Flags word */
+	uint8_t flags;
+	/* Inverse flags */
+	uint8_t invflags;
+};
+
 
 static const char *hooknames[] = {
 	[HOOK_PRE_ROUTING]	= "PREROUTING",
@@ -67,10 +105,81 @@ entry_is_hook_entry(struct ipt_entry *e, struct ipt_getinfo *info,
 
 
 static int 
-add_matches(struct xt_entry_match *m, PyObject *matches_list)
+add_matches(struct xt_entry_match *m, PyObject *matches_dict)
 { 
-	return PyList_Append(matches_list,
-			PyString_FromString(m->u.user.name)) ? 1 : 0; 
+    PyObject *match_dict = NULL; 
+    if (strcmp(m->u.user.name, "pkttype") == 0) {
+        struct xt_pkttype_info *info  = (struct xt_pkttype_info *)m->data;
+        match_dict = PyDict_New();
+        PyDict_SetItemString(match_dict, "type",
+                PyInt_FromLong(info->pkttype));
+        PyDict_SetItemString(match_dict, "invert",
+                PyInt_FromLong(info->invert));
+    } else if (strcmp(m->u.user.name, "tcp") == 0) { 
+        struct xt_tcp *tcpinfo = (struct xt_tcp *)m->data;        
+        match_dict = PyDict_New();  
+        PyDict_SetItemString(match_dict, "spts",
+                PyTuple_Pack(2, PyInt_FromLong(tcpinfo->spts[0]),
+                    PyInt_FromLong(tcpinfo->spts[1])));
+        PyDict_SetItemString(match_dict, "dpts",
+                PyTuple_Pack(2, PyInt_FromLong(tcpinfo->dpts[0]),
+                    PyInt_FromLong(tcpinfo->dpts[1])));
+        PyDict_SetItemString(match_dict, "options",
+                PyInt_FromLong(tcpinfo->option));
+        PyDict_SetItemString(match_dict, "flag_mask",
+                PyInt_FromLong(tcpinfo->flg_mask)); 
+        PyDict_SetItemString(match_dict, "flag_cmp",
+                PyInt_FromLong(tcpinfo->flg_cmp));
+        PyDict_SetItemString(match_dict, "invflags",
+                PyInt_FromLong(tcpinfo->invflags)); 
+    } else if (strcmp(m->u.user.name, "conntrack") == 0) {
+        struct xt_conntrack_info *info = (struct xt_conntrack_info *)m->data;
+        match_dict = PyDict_New();
+        if (info->flags & XT_CONNTRACK_STATE) { 
+            PyDict_SetItemString(match_dict, "ctstate",
+                    PyInt_FromLong(info->statemask));
+        }
+        if (info->flags & XT_CONNTRACK_STATUS) {
+            PyDict_SetItemString(match_dict, "ctstatus",
+                    PyInt_FromLong(info->statusmask));
+        }
+        if (info->flags & XT_CONNTRACK_EXPIRES) {
+            PyDict_SetItemString(match_dict, "expires_min", 
+                    PyInt_FromLong(info->expires_min));
+            PyDict_SetItemString(match_dict, "expires_max",
+                    PyInt_FromLong(info->expires_max));
+        } 
+        PyDict_SetItemString(match_dict, "invflags",
+                PyInt_FromLong(info->invflags));
+        
+
+    } else if (strcmp(m->u.user.name, "limit") == 0) {
+        struct xt_rateinfo *r =(struct xt_rateinfo *)m->data;
+        match_dict = PyDict_New();
+        PyDict_SetItemString(match_dict, "avg",
+                PyInt_FromLong(r->avg));
+        PyDict_SetItemString(match_dict, "burst",
+                PyInt_FromLong(r->burst));
+    } else if (strcmp(m->u.user.name, "icmp") == 0) {
+        struct ipt_icmp *icmpinfo = (struct ipt_icmp *)m->data;
+        match_dict = PyDict_New();
+        PyDict_SetItemString(match_dict, "type",
+                PyInt_FromLong(icmpinfo->type));
+        PyDict_SetItemString(match_dict, "min",
+                PyInt_FromLong(icmpinfo->code[0]));
+        PyDict_SetItemString(match_dict, "max",
+                PyInt_FromLong(icmpinfo->code[1]));
+        PyDict_SetItemString(match_dict, "invflags",
+                PyInt_FromLong(icmpinfo->invflags));
+    } 
+
+    if (match_dict) 
+        PyDict_SetItemString(matches_dict, m->u.user.name,
+                    match_dict); 
+    else
+        PyDict_SetItemString(matches_dict, m->u.user.name, 
+                PyString_FromString("unknown"));
+    return 0;
 }
 
 static int 
@@ -85,7 +194,7 @@ add_entry(struct ipt_entry *e, PyObject *chains_dict,
 	char iniface_buffer[IFNAMSIZ+1];
 	char outiface_buffer[IFNAMSIZ+1];
 	PyObject *rule_dict;
-	PyObject *matches_list; 
+	PyObject *matches_dict; 
 
 	memset(iniface_buffer, 0, IFNAMSIZ+1);
 	memset(outiface_buffer, 0, IFNAMSIZ+1);
@@ -131,15 +240,13 @@ add_entry(struct ipt_entry *e, PyObject *chains_dict,
 	PyDict_SetItemString(rule_dict, "cache",
 			PyInt_FromLong(e->nfcache));
 	/* matches */
-	matches_list = PyList_New(0); 
-	XT_MATCH_ITERATE(struct ipt_entry, e, add_matches, matches_list); 
-	PyDict_SetItemString(rule_dict, "matches", matches_list); 
+	matches_dict = PyDict_New(); 
+	XT_MATCH_ITERATE(struct ipt_entry, e, add_matches, matches_dict); 
+	PyDict_SetItemString(rule_dict, "matches", matches_dict); 
 	/* target */
 	t = (void *)e + e->target_offset;
 	PyDict_SetItemString(rule_dict, "target_name",
 			PyString_FromString(t->u.user.name));
-	PyDict_SetItemString(rule_dict, "target_size",
-			PyInt_FromLong(t->u.target_size)); 
 	/* new chain */ 
 	if (strcmp(t->u.user.name, XT_ERROR_TARGET) == 0) {
 		/* new user defined chain */
@@ -194,6 +301,7 @@ parse_entries(struct ipt_getinfo *info, struct ipt_get_entries *entries)
 			PyInt_FromLong(entries->size));
 	PyDict_SetItemString(table_dict, "tablename",
 			PyString_FromString(info->name)); 
+    /* debug */
 	hooks_dict = PyDict_New();			
 	PyDict_SetItemString(hooks_dict, "pre",
 			PyInt_FromLong(info->hook_entry[HOOK_PRE_ROUTING]));
@@ -312,5 +420,16 @@ PyMODINIT_FUNC initiptables(void)
 	PyObject *m;
 	m = Py_InitModule("iptables", iptables_methods);
 	if (m != NULL) {
+	/* tcp match extension flag */
+	PyModule_AddObject(m, "TCP_FLAG_FIN", PyInt_FromLong(0x01));
+	PyModule_AddObject(m, "TCP_FLAG_SYN", PyInt_FromLong(0x02));
+	PyModule_AddObject(m, "TCP_FLAG_RST", PyInt_FromLong(0x04));
+	PyModule_AddObject(m, "TCP_FLAG_PSH", PyInt_FromLong(0x08));
+	PyModule_AddObject(m, "TCP_FLAG_ACK", PyInt_FromLong(0x10));
+	PyModule_AddObject(m, "TCP_FLAG_URG", PyInt_FromLong(0x20));
+	PyModule_AddObject(m, "TCP_FLAG_ALL", PyInt_FromLong(0x3F));
+	PyModule_AddObject(m, "TCP_FLAG_NONE", PyInt_FromLong(0x0));
+	
 	}
+
 }
