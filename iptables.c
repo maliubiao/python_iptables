@@ -17,6 +17,7 @@
 #include <linux/netfilter/nf_conntrack_tuple_common.h>
 #include <linux/netfilter/xt_pkttype.h>
 #include <linux/netfilter/xt_conntrack.h>
+#include <linux/netfilter/nf_conntrack_common.h>
 #include <linux/netfilter/xt_limit.h>
 #include <linux/netfilter_ipv4/ip_tables.h>
 
@@ -136,11 +137,11 @@ add_matches(struct xt_entry_match *m, PyObject *matches_dict)
         struct xt_conntrack_info *info = (struct xt_conntrack_info *)m->data;
         match_dict = PyDict_New();
         if (info->flags & XT_CONNTRACK_STATE) { 
-            PyDict_SetItemString(match_dict, "ctstate",
+            PyDict_SetItemString(match_dict, "state",
                     PyInt_FromLong(info->statemask));
         }
         if (info->flags & XT_CONNTRACK_STATUS) {
-            PyDict_SetItemString(match_dict, "ctstatus",
+            PyDict_SetItemString(match_dict, "status",
                     PyInt_FromLong(info->statusmask));
         }
         if (info->flags & XT_CONNTRACK_EXPIRES) {
@@ -149,10 +150,42 @@ add_matches(struct xt_entry_match *m, PyObject *matches_dict)
             PyDict_SetItemString(match_dict, "expires_max",
                     PyInt_FromLong(info->expires_max));
         } 
-        PyDict_SetItemString(match_dict, "invflags",
-                PyInt_FromLong(info->invflags));
-        
+	if (info->flags & XT_CONNTRACK_ORIGSRC) {
+		PyDict_SetItemString(match_dict, "origsrc_ip",		
+				PyString_FromStringAndSize(
+					(void *)&((struct in_addr *)&info->tuple[IP_CT_DIR_ORIGINAL].src.ip)->s_addr, 4));
+		PyDict_SetItemString(match_dict, "origsrc_mask",
+				PyString_FromStringAndSize(
+					(void *)&(((struct in_addr *)&info->sipmsk[IP_CT_DIR_ORIGINAL])->s_addr), 4)); 
+	} 
+	if (info->flags & XT_CONNTRACK_ORIGDST) {
+		PyDict_SetItemString(match_dict, "origdst_ip",
+				PyString_FromStringAndSize(
+					(void *)&((struct in_addr *)&info->tuple[IP_CT_DIR_ORIGINAL].dst.ip)->s_addr, 4));
+		PyDict_SetItemString(match_dict, "origdst_mask",
+				PyString_FromStringAndSize(
+					(void *)&(((struct in_addr *)&info->dipmsk[IP_CT_DIR_ORIGINAL])->s_addr), 4));
+	} 
+	if (info->flags & XT_CONNTRACK_REPLSRC) {
+		PyDict_SetItemString(match_dict, "replsrc_ip",
+				PyString_FromStringAndSize(
+					(void *)&((struct in_addr *)&info->tuple[IP_CT_DIR_REPLY].src.ip)->s_addr, 4));
+		PyDict_SetItemString(match_dict, "replsrc_mask",
+				PyString_FromStringAndSize(
+					(void *)&(((struct in_addr *)&info->sipmsk[IP_CT_DIR_REPLY])->s_addr), 4));
 
+	} 
+	if (info->flags & XT_CONNTRACK_REPLDST) {
+		PyDict_SetItemString(match_dict, "repldst_ip",
+				PyString_FromStringAndSize(
+					(void *)&((struct in_addr *)&info->tuple[IP_CT_DIR_REPLY].dst.ip)->s_addr, 4));
+		PyDict_SetItemString(match_dict, "repldst_mask",
+				PyString_FromStringAndSize(
+					(void *)&(((struct in_addr *)&info->dipmsk[IP_CT_DIR_REPLY])->s_addr), 4));
+
+	} 
+        PyDict_SetItemString(match_dict, "invflags",
+                PyInt_FromLong(info->invflags)); 
     } else if (strcmp(m->u.user.name, "limit") == 0) {
         struct xt_rateinfo *r =(struct xt_rateinfo *)m->data;
         match_dict = PyDict_New();
@@ -288,9 +321,7 @@ add_entry(struct ipt_entry *e, PyObject *chains_dict,
 static PyObject *
 parse_entries(struct ipt_getinfo *info, struct ipt_get_entries *entries)
 {
-	PyObject *table_dict;
-	PyObject *hooks_dict;
-	PyObject *underflows_dict; 
+	PyObject *table_dict; 
 	PyObject *chains_dict;
 	PyObject *current_chain = NULL;
 
@@ -301,31 +332,6 @@ parse_entries(struct ipt_getinfo *info, struct ipt_get_entries *entries)
 			PyInt_FromLong(entries->size));
 	PyDict_SetItemString(table_dict, "tablename",
 			PyString_FromString(info->name)); 
-    /* debug */
-	hooks_dict = PyDict_New();			
-	PyDict_SetItemString(hooks_dict, "pre",
-			PyInt_FromLong(info->hook_entry[HOOK_PRE_ROUTING]));
-	PyDict_SetItemString(hooks_dict, "in",
-			PyInt_FromLong(info->hook_entry[HOOK_LOCAL_IN]));
-	PyDict_SetItemString(hooks_dict, "fwd",
-			PyInt_FromLong(info->hook_entry[HOOK_FORWARD]));
-	PyDict_SetItemString(hooks_dict, "out",
-			PyInt_FromLong(info->hook_entry[HOOK_LOCAL_OUT]));
-	PyDict_SetItemString(hooks_dict, "post",
-			PyInt_FromLong(info->hook_entry[HOOK_POST_ROUTING]));
-	underflows_dict = PyDict_New();
-	PyDict_SetItemString(underflows_dict, "pre",
-			PyInt_FromLong(info->underflow[HOOK_PRE_ROUTING]));
-	PyDict_SetItemString(underflows_dict, "in",
-			PyInt_FromLong(info->underflow[HOOK_LOCAL_IN]));
-	PyDict_SetItemString(underflows_dict, "fwd",
-			PyInt_FromLong(info->underflow[HOOK_FORWARD]));
-	PyDict_SetItemString(underflows_dict, "out",
-			PyInt_FromLong(info->underflow[HOOK_LOCAL_OUT]));
-	PyDict_SetItemString(underflows_dict, "post",
-			PyInt_FromLong(info->underflow[HOOK_POST_ROUTING])); 
-	PyDict_SetItemString(table_dict, "hooks", hooks_dict);
-	PyDict_SetItemString(table_dict, "underflows", underflows_dict); 
 
 	chains_dict = PyDict_New();
 	
@@ -429,7 +435,21 @@ PyMODINIT_FUNC initiptables(void)
 	PyModule_AddObject(m, "TCP_FLAG_URG", PyInt_FromLong(0x20));
 	PyModule_AddObject(m, "TCP_FLAG_ALL", PyInt_FromLong(0x3F));
 	PyModule_AddObject(m, "TCP_FLAG_NONE", PyInt_FromLong(0x0));
-	
+	/* ctstate flags */	
+	PyModule_AddObject(m, "CT_INVALID",
+			PyInt_FromLong(XT_CONNTRACK_STATE_INVALID));
+	PyModule_AddObject(m, "CT_NEW",
+			PyInt_FromLong(XT_CONNTRACK_STATE_BIT(IP_CT_NEW)));
+	PyModule_AddObject(m, "CT_ESTABLISHED",
+			PyInt_FromLong(XT_CONNTRACK_STATE_BIT(IP_CT_ESTABLISHED)));
+	PyModule_AddObject(m, "CT_RELATED",
+			PyInt_FromLong(XT_CONNTRACK_STATE_BIT(IP_CT_RELATED)));
+	PyModule_AddObject(m, "CT_UNTRACKED",
+			PyInt_FromLong(XT_CONNTRACK_STATE_BIT(XT_CONNTRACK_STATE_UNTRACKED)));
+	PyModule_AddObject(m, "CT_SNAT",
+			PyInt_FromLong(XT_CONNTRACK_STATE_SNAT));
+	PyModule_AddObject(m, "CT_DNAT",
+			PyInt_FromLong(XT_CONNTRACK_STATE_DNAT));	
 	}
 
 }
