@@ -12,6 +12,7 @@
 #include <netinet/in.h>
 #include <net/if.h>
 #include <linux/types.h>
+#include <linux/icmp.h>
 #include <linux/netfilter.h>
 #include <linux/netfilter/x_tables.h>
 #include <linux/netfilter/nf_conntrack_tuple_common.h>
@@ -23,38 +24,12 @@
 
 #define XTABLES_VERSION "9"
 
-#define IP_PARTS_NATIVE(n)			\
-(unsigned int)((n)>>24)&0xFF,			\
-(unsigned int)((n)>>16)&0xFF,			\
-(unsigned int)((n)>>8)&0xFF,			\
-(unsigned int)((n)&0xFF)
-
-#define IP_PARTS(n) IP_PARTS_NATIVE(ntohl(n)) 
 
 #define HOOK_PRE_ROUTING	NF_IP_PRE_ROUTING
 #define HOOK_LOCAL_IN		NF_IP_LOCAL_IN
 #define HOOK_FORWARD		NF_IP_FORWARD
 #define HOOK_LOCAL_OUT		NF_IP_LOCAL_OUT
 #define HOOK_POST_ROUTING	NF_IP_POST_ROUTING 
-
-struct ip_conntrack_old_tuple {
-	struct {
-		__be32 ip;
-		union {
-			__u16 all;
-		} u;
-	} src;
-
-	struct {
-		__be32 ip;
-		union {
-			__u16 all;
-		} u;
-
-		/* The protocol. */
-		__u16 protonum;
-	} dst;
-};
 
 
 static const char *hooknames[] = {
@@ -270,11 +245,15 @@ add_entry(struct ipt_entry *e, PyObject *chains_dict,
 		*current_chain_ptr = PyList_New(0);
 		PyDict_SetItemString(chains_dict, (char *)t->data,
 				*current_chain_ptr); 
+		Py_XDECREF(rule_dict);	
+		return 0;
 	} else if ((builtin = entry_is_hook_entry(e, info, entries)) != 0) {
 		*current_chain_ptr = PyList_New(0);
 		PyDict_SetItemString(chains_dict,
 				(char *)hooknames[builtin-1],
 				*current_chain_ptr);
+		Py_XDECREF(rule_dict);
+		return 0;
 	} 
 	/* target */
 	if (strcmp(t->u.user.name, XT_STANDARD_TARGET) == 0) {
@@ -419,6 +398,11 @@ PyMODINIT_FUNC initiptables(void)
 	PyModule_AddObject(m, "TCP_FLAG_URG", PyInt_FromLong(0x20));
 	PyModule_AddObject(m, "TCP_FLAG_ALL", PyInt_FromLong(0x3F));
 	PyModule_AddObject(m, "TCP_FLAG_NONE", PyInt_FromLong(0x0));
+	PyModule_AddObject(m, "XT_TCP_INV_SRCPT", PyInt_FromLong(XT_TCP_INV_SRCPT));
+	PyModule_AddObject(m, "XT_TCP_INV_DSTPT", PyInt_FromLong(XT_TCP_INV_DSTPT));
+	PyModule_AddObject(m, "XT_TCP_INV_FLAGS", PyInt_FromLong(XT_TCP_INV_FLAGS));
+	PyModule_AddObject(m, "XT_TCP_INV_OPTION", PyInt_FromLong(XT_TCP_INV_OPTION));
+	PyModule_AddObject(m, "XT_TCP_INV_MASK", PyInt_FromLong(XT_TCP_INV_MASK));
 	/* ctstate flags */	
 	PyModule_AddObject(m, "CT_INVALID",
 			PyInt_FromLong(XT_CONNTRACK_STATE_INVALID));
@@ -434,6 +418,45 @@ PyMODINIT_FUNC initiptables(void)
 			PyInt_FromLong(XT_CONNTRACK_STATE_SNAT));
 	PyModule_AddObject(m, "CT_DNAT",
 			PyInt_FromLong(XT_CONNTRACK_STATE_DNAT));	
+	/* icmp type, total 18*/
+	PyModule_AddObject(m, "ICMP_ECHOREPLY", PyInt_FromLong(ICMP_ECHOREPLY));			
+	PyModule_AddObject(m, "ICMP_DEST_UNREACH", PyInt_FromLong(ICMP_DEST_UNREACH));
+	PyModule_AddObject(m, "ICMP_SOURCE_QUENCH", PyInt_FromLong(ICMP_SOURCE_QUENCH));
+	PyModule_AddObject(m, "ICMP_REDIRECT", PyInt_FromLong(ICMP_REDIRECT));
+	PyModule_AddObject(m, "ICMP_ECHO", PyInt_FromLong(ICMP_ECHO));
+	PyModule_AddObject(m, "ICMP_TIME_EXCEEDED", PyInt_FromLong(ICMP_TIME_EXCEEDED));
+	PyModule_AddObject(m, "ICMP_PARAMETERPROB", PyInt_FromLong(ICMP_PARAMETERPROB));
+	PyModule_AddObject(m, "ICMP_TIMESTAMP", PyInt_FromLong(ICMP_TIMESTAMP));
+	PyModule_AddObject(m, "ICMP_TIMESTAMPREPLY", PyInt_FromLong(ICMP_TIMESTAMPREPLY));
+	PyModule_AddObject(m, "ICMP_INFO_REQUEST", PyInt_FromLong(ICMP_INFO_REQUEST));
+	PyModule_AddObject(m, "ICMP_INFO_REPLY", PyInt_FromLong(ICMP_INFO_REPLY));
+	PyModule_AddObject(m, "ICMP_ADDRESS", PyInt_FromLong(ICMP_ADDRESS));
+	PyModule_AddObject(m, "ICMP_ADDRESSREPLY", PyInt_FromLong(ICMP_ADDRESSREPLY));
+	/* icmp for unreach  total 15*/
+	PyModule_AddObject(m, "ICMP_NET_UNREACH", PyInt_FromLong(ICMP_NET_UNREACH));
+	PyModule_AddObject(m, "ICMP_HOST_UNREACH", PyInt_FromLong(ICMP_HOST_UNREACH));
+	PyModule_AddObject(m, "ICMP_PROT_UNREACH", PyInt_FromLong(ICMP_PROT_UNREACH));
+	PyModule_AddObject(m, "ICMP_PORT_UNREACH", PyInt_FromLong(ICMP_PORT_UNREACH));
+	PyModule_AddObject(m, "ICMP_FRAG_NEEDED", PyInt_FromLong(ICMP_FRAG_NEEDED));
+	PyModule_AddObject(m, "ICMP_SR_FAILED", PyInt_FromLong(ICMP_SR_FAILED));
+	PyModule_AddObject(m, "ICMP_NET_UNKNOWN", PyInt_FromLong(ICMP_NET_UNKNOWN));
+	PyModule_AddObject(m, "ICMP_HOST_UNKNOWN", PyInt_FromLong(ICMP_HOST_UNKNOWN));
+	PyModule_AddObject(m, "ICMP_HOST_ISOLATED", PyInt_FromLong(ICMP_HOST_ISOLATED));
+	PyModule_AddObject(m, "ICMP_NET_ANO", PyInt_FromLong(ICMP_NET_ANO));
+	PyModule_AddObject(m, "ICMP_HOST_ANO", PyInt_FromLong(ICMP_HOST_ANO));
+	PyModule_AddObject(m, "ICMP_NET_UNR_TOS", PyInt_FromLong(ICMP_NET_UNR_TOS));
+	PyModule_AddObject(m, "ICMP_HOST_UNR_TOS", PyInt_FromLong(ICMP_NET_UNR_TOS));
+	PyModule_AddObject(m, "ICMP_PKT_FILTERED", PyInt_FromLong(ICMP_PKT_FILTERED));
+	PyModule_AddObject(m, "ICMP_PREC_VIOLATION", PyInt_FromLong(ICMP_PREC_VIOLATION));
+	PyModule_AddObject(m, "ICMP_PREC_CUTOFF", PyInt_FromLong(ICMP_PREC_CUTOFF));
+	/* REDIRECT, total 3 */	
+	PyModule_AddObject(m, "ICMP_REDIR_NET", PyInt_FromLong(ICMP_REDIR_NET));
+	PyModule_AddObject(m, "ICMP_REDIR_HOST", PyInt_FromLong(ICMP_REDIR_HOST));
+	PyModule_AddObject(m, "ICMP_REDIR_NETTOS", PyInt_FromLong(ICMP_REDIR_NETTOS));
+	PyModule_AddObject(m, "ICMP_REDIR_HOSTTOS", PyInt_FromLong(ICMP_REDIR_HOSTTOS));
+	/* TIME_EXCEEDED */
+	PyModule_AddObject(m, "ICMP_EXC_TTL", PyInt_FromLong(ICMP_EXC_TTL));
+	PyModule_AddObject(m, "ICMP_EXC_FRAGTIME", PyInt_FromLong(ICMP_EXC_FRAGTIME)); 
 	}
 
 }
