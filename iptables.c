@@ -11,6 +11,7 @@
 /* kernel header */
 #include <netinet/in.h>
 #include <net/if.h>
+#include <linux/if_packet.h>
 #include <linux/types.h>
 #include <linux/icmp.h>
 #include <linux/netfilter.h>
@@ -389,6 +390,27 @@ PyMODINIT_FUNC initiptables(void)
 	PyObject *m;
 	m = Py_InitModule("iptables", iptables_methods);
 	if (m != NULL) {
+	/* protocol */
+	PyModule_AddObject(m, "IPPROTO_IP", PyInt_FromLong(IPPROTO_IP));
+	PyModule_AddObject(m, "IPPROTO_ICMP", PyInt_FromLong(IPPROTO_ICMP));
+	PyModule_AddObject(m, "IPPROTO_IGMP", PyInt_FromLong(IPPROTO_IGMP));
+	PyModule_AddObject(m, "IPPROTO_IPIP", PyInt_FromLong(IPPROTO_IPIP));
+	PyModule_AddObject(m, "IPPROTO_TCP", PyInt_FromLong(IPPROTO_TCP));
+	PyModule_AddObject(m, "IPPROTO_EGP", PyInt_FromLong(IPPROTO_EGP));
+	PyModule_AddObject(m, "IPPROTO_PUP", PyInt_FromLong(IPPROTO_PUP));
+	PyModule_AddObject(m, "IPPROTO_UDP", PyInt_FromLong(IPPROTO_UDP));
+	PyModule_AddObject(m, "IPPROTO_IDP", PyInt_FromLong(IPPROTO_IDP));
+	PyModule_AddObject(m, "IPPROTO_DCCP", PyInt_FromLong(IPPROTO_DCCP));
+	PyModule_AddObject(m, "IPPROTO_RSVP", PyInt_FromLong(IPPROTO_RSVP));
+	PyModule_AddObject(m, "IPPROTO_GRE", PyInt_FromLong(IPPROTO_GRE));
+	PyModule_AddObject(m, "IPPROTO_IPV6", PyInt_FromLong(IPPROTO_IPV6));
+	PyModule_AddObject(m, "IPPROTO_ESP", PyInt_FromLong(IPPROTO_ESP));
+	PyModule_AddObject(m, "IPPROTO_AH", PyInt_FromLong(IPPROTO_AH)); 
+	PyModule_AddObject(m, "IPPROTO_PIM", PyInt_FromLong(IPPROTO_PIM));
+	PyModule_AddObject(m, "IPPROTO_COMP", PyInt_FromLong(IPPROTO_COMP));
+	PyModule_AddObject(m, "IPPROTO_SCTP", PyInt_FromLong(IPPROTO_SCTP));
+	PyModule_AddObject(m, "IPPROTO_UDPLITE", PyInt_FromLong(IPPROTO_UDPLITE));
+	PyModule_AddObject(m, "IPPROTO_RAW", PyInt_FromLong(IPPROTO_RAW));
 	/* tcp match extension flag */
 	PyModule_AddObject(m, "TCP_FLAG_FIN", PyInt_FromLong(0x01));
 	PyModule_AddObject(m, "TCP_FLAG_SYN", PyInt_FromLong(0x02));
@@ -457,6 +479,13 @@ PyMODINIT_FUNC initiptables(void)
 	/* TIME_EXCEEDED */
 	PyModule_AddObject(m, "ICMP_EXC_TTL", PyInt_FromLong(ICMP_EXC_TTL));
 	PyModule_AddObject(m, "ICMP_EXC_FRAGTIME", PyInt_FromLong(ICMP_EXC_FRAGTIME)); 
+	PyModule_AddObject(m, "IPT_ICMP_INV", PyInt_FromLong(IPT_ICMP_INV));
+	/* packet type */
+	PyModule_AddObject(m, "PACKET_HOST", PyInt_FromLong(PACKET_HOST));
+	PyModule_AddObject(m, "PACKET_BROADCAST", PyInt_FromLong(PACKET_BROADCAST));
+	PyModule_AddObject(m, "PACKET_MULTICAST", PyInt_FromLong(PACKET_MULTICAST));
+	PyModule_AddObject(m, "PACKET_OTHERHOST", PyInt_FromLong(PACKET_OTHERHOST));
+	PyModule_AddObject(m, "PACKET_OUTGOING", PyInt_FromLong(PACKET_OUTGOING));
 	}
 
 }
