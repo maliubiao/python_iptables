@@ -238,7 +238,7 @@ add_entry(struct ipt_entry *e, PyObject *chains_dict,
 	PyDict_SetItemString(rule_dict, "matches", matches_dict); 
 	/* target */
 	t = (void *)e + e->target_offset;
-	PyDict_SetItemString(rule_dict, "target_name",
+	PyDict_SetItemString(rule_dict, "target",
 			PyString_FromString(t->u.user.name));
 	/* new chain */ 
 	if (strcmp(t->u.user.name, XT_ERROR_TARGET) == 0) {
@@ -261,7 +261,7 @@ add_entry(struct ipt_entry *e, PyObject *chains_dict,
 		const unsigned char *data = t->data;
 		int pos = *(const int *)data;
 		if (pos < 0) {
-			PyDict_SetItemString(rule_dict, "verdict",
+			PyDict_SetItemString(rule_dict, "verb",
 				PyString_FromString(
 					pos == -NF_ACCEPT-1 ? "ACCEPT"
 					: pos == -NF_DROP-1 ? "DROP"
@@ -270,7 +270,7 @@ add_entry(struct ipt_entry *e, PyObject *chains_dict,
 					: "UNKNOWN"));
 		}
 		else {
-			PyDict_SetItemString(rule_dict, "verdict",
+			PyDict_SetItemString(rule_dict, "verb",
 					PyInt_FromLong(pos));
 		}
 	} 
@@ -390,6 +390,15 @@ PyMODINIT_FUNC initiptables(void)
 	PyObject *m;
 	m = Py_InitModule("iptables", iptables_methods);
 	if (m != NULL) {
+	PyModule_AddObject(m, "IPT_F_FRAG", PyInt_FromLong(IPT_F_FRAG));
+	PyModule_AddObject(m, "IPT_F_GOTO", PyInt_FromLong(IPT_F_GOTO));
+	PyModule_AddObject(m, "IPT_F_MASK", PyInt_FromLong(IPT_F_MASK));
+	PyModule_AddObject(m, "IPT_INV_SRCIP", PyInt_FromLong(IPT_INV_SRCIP));
+	PyModule_AddObject(m, "IPT_INV_DSTIP", PyInt_FromLong(IPT_INV_DSTIP));
+	PyModule_AddObject(m, "IPT_INV_VIA_IN", PyInt_FromLong(IPT_INV_VIA_IN));
+	PyModule_AddObject(m, "IPV_INV_VIA_OUT", PyInt_FromLong(IPT_INV_VIA_OUT));
+	PyModule_AddObject(m, "XT_INV_PROTO", PyInt_FromLong(XT_INV_PROTO));
+	PyModule_AddObject(m, "IPT_INV_FRAG", PyInt_FromLong(IPT_INV_FRAG));
 	/* protocol */
 	PyModule_AddObject(m, "IPPROTO_IP", PyInt_FromLong(IPPROTO_IP));
 	PyModule_AddObject(m, "IPPROTO_ICMP", PyInt_FromLong(IPPROTO_ICMP));

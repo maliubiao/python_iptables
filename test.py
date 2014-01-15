@@ -1,6 +1,30 @@
 import iptables
 import pprint
+import pdb
 from cStringIO import StringIO
+
+protocol_dict = {
+        iptables.IPPROTO_IP: "IP",
+        iptables.IPPROTO_ICMP: "ICMP",
+        iptables.IPPROTO_IGMP: "IGMP",
+        iptables.IPPROTO_IPIP: "IPIP",
+        iptables.IPPROTO_TCP: "TCP",
+        iptables.IPPROTO_EGP: "EGP",
+        iptables.IPPROTO_PUP: "PUP",
+        iptables.IPPROTO_UDP: "UDP",
+        iptables.IPPROTO_IDP: "IDP",
+        iptables.IPPROTO_DCCP: "DCCP",
+        iptables.IPPROTO_RSVP: "RSVP",
+        iptables.IPPROTO_GRE: "GRE",
+        iptables.IPPROTO_IPV6: "IPV6",
+        iptables.IPPROTO_ESP: "ESP",
+        iptables.IPPROTO_AH: "AH",
+        iptables.IPPROTO_PIM: "PIM",
+        iptables.IPPROTO_COMP: "COMP",
+        iptables.IPPROTO_SCTP: "SCTP",
+        iptables.IPPROTO_UDPLITE: "UDPLITE",
+        iptables.IPPROTO_RAW: "RAW"
+        }
 
 ctstate_dict = {
         iptables.CT_ESTABLISHED: "ESTABLISHED",
@@ -233,10 +257,6 @@ icmp_code_dict = {
             ] 
         }
 
-t = iptables.get_entries("filter") 
-print "table: %s" % t["tablename"]
-print "chains: ", " ".join(t["chains"].keys())
-
 def handle_matches(rule_buffer, match_tuple):
     match, value = match_tuple
     if match == "conntrack": 
@@ -245,7 +265,7 @@ def handle_matches(rule_buffer, match_tuple):
             state_buffer = StringIO() 
             state_buffer.write("--ctstate ")
             state = value["state"] 
-            state_buffer.write(" ".join([x for x in ctstate_dict if x & state])+" ")
+            state_buffer.write(" ".join([ctstate_dict[x] for x in ctstate_dict if x & state])+" ")
             rule_buffer.write(state_buffer.getvalue())
             state_buffer.close()
     elif match == "tcp":
@@ -253,17 +273,18 @@ def handle_matches(rule_buffer, match_tuple):
         tcp_buffer = StringIO()
         invflags = value["invflags"]
         if value["dpts"] != (0, 65535):
-            ft = "--dports: %s " % "-".join(value["dpts"])
+            ft = "--dports: %s " % "-".join([str(x) for x in value["dpts"]])
             if invflags & iptables.XT_TCP_INV_DSTPT:
                 ft = "not " + ft
             tcp_buffer.write(ft)
         if value["spts"] != (0, 65535):
-            ft = "--sports: %s " % "-".join(value["spts"])
+            ft = "--sports: %s " % "-".join([str(x) for x in value["spts"]])
             if invflags & iptables.XT_TCP_INV_SRCPT:
                 ft = "not " + ft
             tcp_buffer.write(ft)
         if value["flag_cmp"]: 
-            ft = "--tcp-flags %s " % " ".join([x for x in tcp_flags_dict if x & flags])
+            flags = value["flag_cmp"]
+            ft = "--tcp-flags %s " % " ".join([tcp_flags_dict[x] for x in tcp_flags_dict if x & flags])
             if invflags & iptables.XT_TCP_INV_FLAGS: 
                 ft = "not " + ft
             tcp_buffer.write(ft) 
@@ -304,32 +325,60 @@ def handle_matches(rule_buffer, match_tuple):
         rule_buffer.write(limit_buffer.getvalue())
         limit_buffer.close()
     elif match == "pkttype":
-        rule_buffer.write("-m pkttype %s" % value["type"]) 
+        rule_buffer.write("-m pkttype --type %s " % pkttype_dict[value["type"]]) 
 
 
-def handle_rule(rule_dict):
-    rule_buffer = StringIO() 
+def handle_rule(rule_buffer, rule_dict): 
+    invflags = rule_dict["invflags"]
     if rule_dict["dstip"]:                     
-        rule_buffer.write("-dstip %s/%s " % (rule_dict["dstip"], rule_dict["dstip_mask"]))
+        ft = "-dstip %s/%s " % (rule_dict["dstip"], rule_dict["dstip_mask"])
+        if invflags & iptables.IPT_INV_DSTIP:
+            ft = "not " + ft
+        rule_buffer.write(ft)
     if rule_dict["srcip"]:
-        rule_buffer.write("-srcip %s/%s " % (rule_dict["srcip"], rule_dict["srcip_mask"]))
+        ft = "-srcip %s/%s " % (rule_dict["srcip"], rule_dict["srcip_mask"])
+        if invflags & iptables.IPT_INV_SRCIP:
+            ft = "not " + ft 
+        rule_buffer.write(ft)
     if rule_dict["iniface"]:
-        rule_buffer.write("-iface %s/%s " % (rule_dict["iniface"], rule_dict["iniface_mask"]))
+        ft = "-i %s/%s " % (rule_dict["iniface"], rule_dict["iniface_mask"])
+        if invflags & iptables.IPT_INV_VIA_IN:
+            ft = "not " + ft 
+        rule_buffer.write(ft) 
     if rule_dict["outiface"]:
-        rule_buffer.write("-oface %s/%s " % (rule_dict["outiface"], rule_dict["outiface_mask"]))
+        ft = "-o %s/%s " % (rule_dict["outiface"], rule_dict["outiface_mask"])
+        if invflags & iptables.IPT_INV_VIA_OUT:
+            ft = "not " + ft
+        rule_buffer.write(ft) 
+
     if rule_dict["protocol"]:
-        pass
- 
+        ft = "-proto %s " % protocol_dict[rule_dict["protocol"]]
+        if invflags & iptables.XT_INV_PROTO:
+            ft = "not " + ft
+        rule_buffer.write(ft)
+    if rule_dict["flags"]:
+        rule_buffer.write("-flags %d " % rule_dict["flags"])
+
+    if rule_dict.get("verb"): 
+        rule_buffer.write("-j %s " % str(rule_dict["verb"])) 
+    if rule_dict["target"]: 
+        rule_buffer.write("-j %s " % str(rule_dict["target"])) 
     if "matches" in rule_dict:
         #matches 
-        for match_tuple in rule["matches"].items(): 
+        for match_tuple in rule_dict["matches"].items(): 
             #match plugins
             handle_matches(rule_buffer, match_tuple) 
     
-
 def handle_chains(table):
-    for chain in t["chains"]: 
-        for rule in rules:
-            handle_rule(rule_dict)                      
+    t = iptables.get_entries(table) 
+    print "table: %s" % t["tablename"]
+    print "chains: ", " ".join(t["chains"].keys()) 
+    for chain, rules in t["chains"].items(): 
+        print "============in chain %s" % chain 
+        for rule_dict in rules:
+            rule_buffer = StringIO() 
+            handle_rule(rule_buffer, rule_dict)                      
+            print rule_buffer.getvalue()
+            rule_buffer.close()
 
-pprint.pprint(dir(iptables))
+handle_chains("filter")
