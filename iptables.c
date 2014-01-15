@@ -231,17 +231,17 @@ add_entry(struct ipt_entry *e, PyObject *chains_dict,
 	PyDict_SetItemString(rule_dict, "dstip_mask",
 			PyInt_FromLong(e->ip.dmsk.s_addr));
 	for (i = 0; i < IFNAMSIZ; i++) {
-		*(iniface_buffer+i) = e->ip.iniface_mask[i] ? 'X' : '.';
-		*(outiface_buffer) = e->ip.outiface_mask[i] ? 'X' : '.';
+		*(iniface_buffer+i) = e->ip.iniface_mask[i];
+		*(outiface_buffer) = e->ip.outiface_mask[i];
 	} 
 	PyDict_SetItemString(rule_dict, "iniface",
 			PyString_FromString(e->ip.iniface));
 	PyDict_SetItemString(rule_dict, "iniface_mask",
-			PyString_FromString(iniface_buffer));
+			PyString_FromStringAndSize(iniface_buffer, IFNAMSIZ));
 	PyDict_SetItemString(rule_dict, "outiface",
 			PyString_FromString(e->ip.outiface));
 	PyDict_SetItemString(rule_dict, "outiface_mask",
-			PyString_FromString(outiface_buffer));
+			PyString_FromStringAndSize(outiface_buffer, IFNAMSIZ));
 	PyDict_SetItemString(rule_dict, "protocol",
 			PyInt_FromLong(e->ip.proto));
 	PyDict_SetItemString(rule_dict, "flags",
