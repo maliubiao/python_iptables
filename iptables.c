@@ -1,5 +1,5 @@
 #include <Python.h>
-/* user headers */
+/* user headers common */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,12 +8,14 @@
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/socket.h> 
-/* kernel header */
+#include <syslog.h>
+/* kernel header common */
 #include <netinet/in.h>
 #include <net/if.h>
 #include <linux/if_packet.h>
 #include <linux/types.h>
 #include <linux/icmp.h>
+/* netfilter */
 #include <linux/netfilter.h>
 #include <linux/netfilter/x_tables.h>
 #include <linux/netfilter/nf_conntrack_tuple_common.h>
@@ -22,9 +24,10 @@
 #include <linux/netfilter/nf_conntrack_common.h>
 #include <linux/netfilter/xt_limit.h>
 #include <linux/netfilter_ipv4/ip_tables.h>
+#include <linux/netfilter_ipv4/ipt_LOG.h>
+#include <linux/netfilter_ipv4/ipt_REJECT.h>
 
-#define XTABLES_VERSION "9"
-
+#define XTABLES_VERSION "9" 
 
 #define HOOK_PRE_ROUTING	NF_IP_PRE_ROUTING
 #define HOOK_LOCAL_IN		NF_IP_LOCAL_IN
@@ -48,6 +51,11 @@ offset_get_entry(struct ipt_get_entries *entries, unsigned int offset)
 	return (struct ipt_entry *)((char*)entries->entrytable + offset);
 }
 
+static unsigned long 
+entry_get_offset(struct ipt_get_entries *entries, struct ipt_entry *e)
+{
+	return (void *)e - (void *)entries->entrytable;
+}
 /*
  * maybe a predefined chain, aka hook.
  */
@@ -198,6 +206,9 @@ add_entry(struct ipt_entry *e, PyObject *chains_dict,
 	}
 	/* rule data */
 	rule_dict = PyDict_New();
+	/* for jump target */
+	PyDict_SetItemString(rule_dict, "offset", 
+			PyInt_FromLong(entry_get_offset(entries, e)));
 	PyDict_SetItemString(rule_dict, "srcip",
 			PyInt_FromLong(e->ip.src.s_addr));
 	PyDict_SetItemString(rule_dict, "srcip_mask",
@@ -252,28 +263,60 @@ add_entry(struct ipt_entry *e, PyObject *chains_dict,
 		*current_chain_ptr = PyList_New(0);
 		PyDict_SetItemString(chains_dict,
 				(char *)hooknames[builtin-1],
-				*current_chain_ptr);
-		Py_XDECREF(rule_dict);
-		return 0;
+				*current_chain_ptr); 
 	} 
 	/* target */
-	if (strcmp(t->u.user.name, XT_STANDARD_TARGET) == 0) {
-		const unsigned char *data = t->data;
-		int pos = *(const int *)data;
-		if (pos < 0) {
+	struct xt_standard_target *xt = (void *)t; 
+	if (strcmp(t->u.user.name, XT_STANDARD_TARGET) == 0) { 
+		if (xt->verdict < 0) {
+			PyDict_SetItemString(rule_dict, "target_type",
+					PyString_FromString("standard"));
 			PyDict_SetItemString(rule_dict, "verb",
 				PyString_FromString(
-					pos == -NF_ACCEPT-1 ? "ACCEPT"
-					: pos == -NF_DROP-1 ? "DROP"
-					: pos == -NF_QUEUE-1 ?"QUEUE"
-					: pos == XT_RETURN ? "RETURN"
+					xt->verdict == -NF_ACCEPT-1 ? "ACCEPT"
+					: xt->verdict == -NF_DROP-1 ? "DROP"
+					: xt->verdict == -NF_QUEUE-1 ?"QUEUE"
+					: xt->verdict == XT_RETURN ? "RETURN"
 					: "UNKNOWN"));
 		}
-		else {
+		else if (xt->verdict == entry_get_offset(entries, e) + e->next_offset) {
+			PyDict_SetItemString(rule_dict, "target_type",
+					PyString_FromString("fallthrough"));
 			PyDict_SetItemString(rule_dict, "verb",
-					PyInt_FromLong(pos));
+					PyInt_FromLong(xt->verdict));
+		} else {
+			PyDict_SetItemString(rule_dict, "target_type",
+					PyString_FromString("jump"));
+			PyDict_SetItemString(rule_dict, "verb",
+					PyInt_FromLong(xt->verdict));
 		}
-	} 
+	}  else {
+		/* target extension */
+		PyObject *target_dict;
+		target_dict = PyDict_New();
+		if (strcmp(t->u.user.name, "LOG") == 0) { 
+			struct ipt_log_info *loginfo = (void *)t->data;
+			PyDict_SetItemString(target_dict, "level",	
+					PyInt_FromLong((long)loginfo->level));
+			PyDict_SetItemString(target_dict, "logflags",
+					PyInt_FromLong((long)loginfo->logflags));
+			PyDict_SetItemString(target_dict, "prefix",
+					PyString_FromString(loginfo->prefix));
+			PyDict_SetItemString(rule_dict, "target_dict",
+					target_dict);
+		} 
+		if (strcmp(t->u.user.name, "REJECT") == 0) {
+			struct ipt_reject_info *rjinfo = (void *)t->data;
+			PyDict_SetItemString(target_dict, "with",
+					PyInt_FromLong(rjinfo->with));
+			PyDict_SetItemString(rule_dict, "target_dict",
+					target_dict);
+		}
+		PyDict_SetItemString(rule_dict, "target_type",
+				PyString_FromString("module"));
+		PyDict_SetItemString(rule_dict, "verb",
+				PyInt_FromLong(xt->verdict)); 
+	}
 	/* add rule to current_chain */
 	if (*current_chain_ptr) 
 		return PyList_Append(*current_chain_ptr, rule_dict) ? 1 : 0; 
@@ -316,10 +359,10 @@ parse_entries(struct ipt_getinfo *info, struct ipt_get_entries *entries)
 
 } 
 
-PyDoc_STRVAR(iptables_get_entries_doc, "get entries of a table");
+PyDoc_STRVAR(iptables_get_table_doc, "get entries of a table");
 
 static PyObject *
-iptables_get_entries(PyObject *object, PyObject *args)
+iptables_get_table(PyObject *object, PyObject *args)
 { 
 	struct ipt_getinfo *info;
 	struct ipt_get_entries *entries;
@@ -380,8 +423,8 @@ ERROR:
 
 
 static PyMethodDef iptables_methods[] = {
-	{"get_entries", (PyCFunction)iptables_get_entries,
-		METH_VARARGS, iptables_get_entries_doc},
+	{"get_table", (PyCFunction)iptables_get_table,
+		METH_VARARGS, iptables_get_table_doc},
 	{NULL, NULL, 0, NULL}
 };
 
@@ -396,7 +439,7 @@ PyMODINIT_FUNC initiptables(void)
 	PyModule_AddObject(m, "IPT_INV_SRCIP", PyInt_FromLong(IPT_INV_SRCIP));
 	PyModule_AddObject(m, "IPT_INV_DSTIP", PyInt_FromLong(IPT_INV_DSTIP));
 	PyModule_AddObject(m, "IPT_INV_VIA_IN", PyInt_FromLong(IPT_INV_VIA_IN));
-	PyModule_AddObject(m, "IPV_INV_VIA_OUT", PyInt_FromLong(IPT_INV_VIA_OUT));
+	PyModule_AddObject(m, "IPT_INV_VIA_OUT", PyInt_FromLong(IPT_INV_VIA_OUT));
 	PyModule_AddObject(m, "XT_INV_PROTO", PyInt_FromLong(XT_INV_PROTO));
 	PyModule_AddObject(m, "IPT_INV_FRAG", PyInt_FromLong(IPT_INV_FRAG));
 	/* protocol */
@@ -444,7 +487,7 @@ PyMODINIT_FUNC initiptables(void)
 	PyModule_AddObject(m, "CT_RELATED",
 			PyInt_FromLong(XT_CONNTRACK_STATE_BIT(IP_CT_RELATED)));
 	PyModule_AddObject(m, "CT_UNTRACKED",
-			PyInt_FromLong(XT_CONNTRACK_STATE_BIT(XT_CONNTRACK_STATE_UNTRACKED)));
+			PyInt_FromLong(XT_CONNTRACK_STATE_UNTRACKED));
 	PyModule_AddObject(m, "CT_SNAT",
 			PyInt_FromLong(XT_CONNTRACK_STATE_SNAT));
 	PyModule_AddObject(m, "CT_DNAT",
@@ -495,6 +538,31 @@ PyMODINIT_FUNC initiptables(void)
 	PyModule_AddObject(m, "PACKET_MULTICAST", PyInt_FromLong(PACKET_MULTICAST));
 	PyModule_AddObject(m, "PACKET_OTHERHOST", PyInt_FromLong(PACKET_OTHERHOST));
 	PyModule_AddObject(m, "PACKET_OUTGOING", PyInt_FromLong(PACKET_OUTGOING));
+	/* target LOG, syslog consts */
+	PyModule_AddObject(m, "LOG_ALERT", PyInt_FromLong(LOG_ALERT));
+	PyModule_AddObject(m, "LOG_CRIT", PyInt_FromLong(LOG_CRIT));
+	PyModule_AddObject(m, "LOG_DEBUG", PyInt_FromLong(LOG_DEBUG));
+	PyModule_AddObject(m, "LOG_EMERG", PyInt_FromLong(LOG_EMERG));
+	PyModule_AddObject(m, "LOG_ERR", PyInt_FromLong(LOG_ERR));
+	PyModule_AddObject(m, "LOG_INFO", PyInt_FromLong(LOG_INFO));
+	PyModule_AddObject(m, "LOG_NOTICE", PyInt_FromLong(LOG_NOTICE)); 
+	PyModule_AddObject(m, "LOG_WARNING", PyInt_FromLong(LOG_WARNING));
+
+	PyModule_AddObject(m, "LOG_TCPSEQ", PyInt_FromLong(IPT_LOG_TCPSEQ));
+	PyModule_AddObject(m, "LOG_TCPOPT", PyInt_FromLong(IPT_LOG_TCPOPT));
+	PyModule_AddObject(m, "LOG_IPOPT", PyInt_FromLong(IPT_LOG_IPOPT));
+	PyModule_AddObject(m, "LOG_UID", PyInt_FromLong(IPT_LOG_UID));
+	PyModule_AddObject(m, "LOG_MACDECODE", PyInt_FromLong(IPT_LOG_MACDECODE));
+	/* target REJECT consts */
+	PyModule_AddObject(m, "IPT_ICMP_NET_UNREACHABLE", PyInt_FromLong(IPT_ICMP_NET_UNREACHABLE));
+	PyModule_AddObject(m, "IPT_ICMP_HOST_UNREACHABLE", PyInt_FromLong(IPT_ICMP_HOST_UNREACHABLE));
+	PyModule_AddObject(m, "IPT_ICMP_PROT_UNREACHABLE", PyInt_FromLong(IPT_ICMP_PROT_UNREACHABLE));
+	PyModule_AddObject(m, "IPT_ICMP_PORT_UNREACHABLE", PyInt_FromLong(IPT_ICMP_PORT_UNREACHABLE));
+	PyModule_AddObject(m, "IPT_ICMP_ECHOREPLY", PyInt_FromLong(IPT_ICMP_ECHOREPLY));
+	PyModule_AddObject(m, "IPT_ICMP_NET_PROHIBITED", PyInt_FromLong(IPT_ICMP_NET_PROHIBITED));
+	PyModule_AddObject(m, "IPT_ICMP_HOST_PROHIBITED", PyInt_FromLong(IPT_ICMP_HOST_PROHIBITED));
+	PyModule_AddObject(m, "IPT_TCP_RESET", PyInt_FromLong(IPT_TCP_RESET));
+	PyModule_AddObject(m, "IPT_ICMP_ADMIN_PROHIBITED", PyInt_FromLong(IPT_ICMP_ADMIN_PROHIBITED));
 	}
 
 }

@@ -3,6 +3,9 @@ import pprint
 import pdb
 from cStringIO import StringIO
 
+jump_table = {
+        }
+
 protocol_dict = {
         iptables.IPPROTO_IP: "IP",
         iptables.IPPROTO_ICMP: "ICMP",
@@ -36,8 +39,7 @@ ctstate_dict = {
         iptables.CT_SNAT: "SNAT"
         }
 
-tcp_flags_dict = {
-        iptables.TCP_FLAG_ALL: "ALL",
+tcp_flags_dict = { 
         iptables.TCP_FLAG_ACK: "ACK",
         iptables.TCP_FLAG_FIN: "FIN",
         iptables.TCP_FLAG_NONE: "NONE",
@@ -53,6 +55,34 @@ pkttype_dict = {
         iptables.PACKET_MULTICAST: "multicast",
         iptables.PACKET_OTHERHOST: "othercast",
         iptables.PACKET_OUTGOING: "outgoing"
+        }
+
+log_dict = {
+        iptables.LOG_ALERT: "alert",
+        iptables.LOG_CRIT: "crit",
+        iptables.LOG_DEBUG: "debug",
+        iptables.LOG_EMERG: "emerg",
+        iptables.LOG_ERR: "err",
+        iptables.LOG_INFO: "info",
+        iptables.LOG_NOTICE: "notice",
+        iptables.LOG_WARNING: "warning",
+        iptables.LOG_TCPSEQ: "tcp-seq",
+        iptables.LOG_TCPOPT: "tcp-opt",
+        iptables.LOG_IPOPT: "ip-opt",
+        iptables.LOG_UID: "uid",
+        iptables.LOG_MACDECODE: "mac-decode"
+        }
+
+reject_dict = {
+        iptables.IPT_ICMP_NET_UNREACHABLE: "icmp-net-unreachable",
+        iptables.IPT_ICMP_HOST_UNREACHABLE: "icmp-host-unreachable",
+        iptables.IPT_ICMP_PROT_UNREACHABLE: "icmp-prot_unreachable",
+        iptables.IPT_ICMP_PORT_UNREACHABLE: "icmp-port_unreachable",
+        iptables.IPT_ICMP_ECHOREPLY: "icmp_echoreply",
+        iptables.IPT_ICMP_NET_PROHIBITED: "icmp-net-prohibited",
+        iptables.IPT_ICMP_HOST_PROHIBITED: "icmp-host-prohibited",
+        iptables.IPT_TCP_RESET: "tcp-reset",
+        iptables.IPT_ICMP_ADMIN_PROHIBITED: "icmp_admin_prohibited"
         }
 
 icmp_code_dict = {
@@ -257,6 +287,7 @@ icmp_code_dict = {
             ] 
         }
 
+
 def handle_matches(rule_buffer, match_tuple):
     match, value = match_tuple
     if match == "conntrack": 
@@ -283,8 +314,11 @@ def handle_matches(rule_buffer, match_tuple):
                 ft = "not " + ft
             tcp_buffer.write(ft)
         if value["flag_cmp"]: 
-            flags = value["flag_cmp"]
-            ft = "--tcp-flags %s " % " ".join([tcp_flags_dict[x] for x in tcp_flags_dict if x & flags])
+            flags = value["flag_cmp"] 
+            mask = value["flag_mask"]
+            ft = "--tcp-flags %s/%s " % (
+                    " ".join([tcp_flags_dict[x] for x in tcp_flags_dict if x & flags]),
+                    ",".join([tcp_flags_dict[x] for x in tcp_flags_dict if x & mask]))
             if invflags & iptables.XT_TCP_INV_FLAGS: 
                 ft = "not " + ft
             tcp_buffer.write(ft) 
@@ -341,44 +375,73 @@ def handle_rule(rule_buffer, rule_dict):
             ft = "not " + ft 
         rule_buffer.write(ft)
     if rule_dict["iniface"]:
-        ft = "-i %s/%s " % (rule_dict["iniface"], rule_dict["iniface_mask"])
+        ft = "-i %s " % (rule_dict["iniface"])
         if invflags & iptables.IPT_INV_VIA_IN:
             ft = "not " + ft 
         rule_buffer.write(ft) 
     if rule_dict["outiface"]:
-        ft = "-o %s/%s " % (rule_dict["outiface"], rule_dict["outiface_mask"])
+        ft = "-o %s " % (rule_dict["outiface"])
         if invflags & iptables.IPT_INV_VIA_OUT:
             ft = "not " + ft
         rule_buffer.write(ft) 
-
     if rule_dict["protocol"]:
         ft = "-proto %s " % protocol_dict[rule_dict["protocol"]]
         if invflags & iptables.XT_INV_PROTO:
             ft = "not " + ft
         rule_buffer.write(ft)
     if rule_dict["flags"]:
-        rule_buffer.write("-flags %d " % rule_dict["flags"])
-
-    if rule_dict.get("verb"): 
-        rule_buffer.write("-j %s " % str(rule_dict["verb"])) 
-    if rule_dict["target"]: 
-        rule_buffer.write("-j %s " % str(rule_dict["target"])) 
+        rule_buffer.write("-flags %d " % rule_dict["flags"]) 
+    if rule_dict.get("target"): 
+        if rule_dict["target_type"] == "standard":
+            rule_buffer.write("-j %s " % rule_dict["target"])
+        elif rule_dict["target_type"] == "module": 
+            target = rule_dict["target"]
+            try:
+                target_dict = rule_dict["target_dict"]
+            except:
+                rule_buffer.write("-j %s " % target) 
+            if target == "REJECT": 
+                rule_buffer.write("-j REJECT --with-%s " % reject_dict[target_dict["with"]])
+            if target == "LOG": 
+                rule_buffer.write("-j LOG ")
+                if target_dict.get("level"):
+                    rule_buffer.write("--log-%s " % log_dict[target_dict["level"]])
+                if target_dict.get("logflags"):
+                    rule_buffer.write("--log-%s " % log_dict[target_dict["logflags"]])
+                if target_dict.get("prefix"):
+                    rule_buffer.write("--prefix \"%s\" " % target_dict["prefix"]) 
+    else:
+        if rule_dict["target_type"] == "jump":
+            rule_buffer.write("-j %s " % jump_table[rule_dict["verb"]])
+        elif rule_dict["target_type"] == "standard":
+            rule_buffer.write("-j %s " % rule_dict["verb"])
     if "matches" in rule_dict:
         #matches 
         for match_tuple in rule_dict["matches"].items(): 
             #match plugins
             handle_matches(rule_buffer, match_tuple) 
-    
+
+
 def handle_chains(table):
-    t = iptables.get_entries(table) 
+    t = iptables.get_table(table) 
+    #jump table
+    chains = t["chains"].items()
+    chain2offset = {}
+    for chain, rules in chains:
+        chain2offset[rules[0]["offset"]] = chain 
+    for chain, rules in chains:
+        for rule in rules:
+            if rule["target_type"] == "jump":
+               jump_table[rule["verb"]] = chain2offset[rule["verb"]] 
+    #print table detail
     print "table: %s" % t["tablename"]
     print "chains: ", " ".join(t["chains"].keys()) 
-    for chain, rules in t["chains"].items(): 
+    for chain, rules in chains:
         print "============in chain %s" % chain 
         for rule_dict in rules:
             rule_buffer = StringIO() 
             handle_rule(rule_buffer, rule_dict)                      
             print rule_buffer.getvalue()
-            rule_buffer.close()
+            rule_buffer.close() 
 
 handle_chains("filter")
