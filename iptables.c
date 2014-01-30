@@ -1,4 +1,4 @@
-#include <Python.h>
+#include "Python.h"
 /* user headers common */
 #include <stdio.h>
 #include <stdlib.h>
@@ -420,11 +420,61 @@ ERROR:
 	return NULL;
 }
 
+static PyObject *
+prepare_chain(PyObject *chain_list)
+{
+	if (!chain_list) {
+		goto CLEAR;
+	}
+CLEAR:	
+	return NULL; 
+}
 
+PyDoc_STRVAR(iptables_replace_table_doc, "replace this table in kernel");
+
+static PyObject *
+iptables_replace_table(PyObject *object, PyObject *args)
+{
+	PyObject *chains_dict;
+	PyObject *chains_keys;
+	struct ipt_replace *replace;
+	struct xt_counters_info *_counter_info; 
+	if (!PyArg_ParseTuple(args, "O|replace_table", &chains_dict)) {
+		return NULL;
+	}
+	chains_keys = PyDict_Keys(chains_dict);
+	PyObject *chains_keys_iter = PyIter_GetIter(chains_keys);
+	if (!chains_keys_iter) {
+		Py_XDECREF(chains_keys);
+		goto CLEAR;
+	}
+	PyObject *chains_keys_next = PyIter_Next(chains_keys_iter);
+	if (!chains_keys_next) {
+		Py_XDECREF(chains_keys_next);
+		goto CLEAR;
+	}
+	while (chains_keys_next) {
+		/* handle chains*/
+		PyObject *chain_list = PyDict_GetItem(chains_dict, chains_keys_next); 
+		PyObject *chain_ret = prepare_chain(chain_list); 
+		if (!chain_ret) { 
+			Py_XDECREF(chains_keys_next);
+			Py_XDECREF(chains_keys_iter);
+			Py_XDECREF(chain_list); 
+			goto CLEAR;
+		}
+		chains_keys_next = PyIter_next(chains_keys_iter);
+	} 
+CLEAR:
+	PyErr_SetString(PyExc_OSError, "python generate error");
+	return NULL; 
+}
 
 static PyMethodDef iptables_methods[] = {
 	{"get_table", (PyCFunction)iptables_get_table,
 		METH_VARARGS, iptables_get_table_doc},
+	{"replace_table", (PyCFunction)iptables_replace_table,
+		METH_VARARGS, iptables_replace_table_doc},
 	{NULL, NULL, 0, NULL}
 };
 
@@ -563,6 +613,5 @@ PyMODINIT_FUNC initiptables(void)
 	PyModule_AddObject(m, "IPT_ICMP_HOST_PROHIBITED", PyInt_FromLong(IPT_ICMP_HOST_PROHIBITED));
 	PyModule_AddObject(m, "IPT_TCP_RESET", PyInt_FromLong(IPT_TCP_RESET));
 	PyModule_AddObject(m, "IPT_ICMP_ADMIN_PROHIBITED", PyInt_FromLong(IPT_ICMP_ADMIN_PROHIBITED));
-	}
-
+	} 
 }
