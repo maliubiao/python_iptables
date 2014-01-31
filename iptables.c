@@ -1,4 +1,4 @@
-#include "Python.h"
+#include "Python.h" 
 /* user headers common */
 #include <stdio.h>
 #include <stdlib.h>
@@ -421,11 +421,11 @@ ERROR:
 }
 
 static PyObject *
-prepare_chain(PyObject *chain_list)
+prepare_chain(struct ipt_replace *replace, PyObject *chains_dict, PyObject *chain_list)
 {
 	if (!chain_list) {
 		goto CLEAR;
-	}
+	} 
 CLEAR:	
 	return NULL; 
 }
@@ -443,7 +443,7 @@ iptables_replace_table(PyObject *object, PyObject *args)
 		return NULL;
 	}
 	chains_keys = PyDict_Keys(chains_dict);
-	PyObject *chains_keys_iter = PyIter_GetIter(chains_keys);
+	PyObject *chains_keys_iter = PyObject_GetIter(chains_keys);
 	if (!chains_keys_iter) {
 		Py_XDECREF(chains_keys);
 		goto CLEAR;
@@ -456,21 +456,86 @@ iptables_replace_table(PyObject *object, PyObject *args)
 	while (chains_keys_next) {
 		/* handle chains*/
 		PyObject *chain_list = PyDict_GetItem(chains_dict, chains_keys_next); 
-		PyObject *chain_ret = prepare_chain(chain_list); 
+		PyObject *chain_ret = prepare_chain(replace, chains_dict, chain_list); 
+		Py_XDECREF(chain_list); 
+		Py_XDECREF(chains_keys_next); 
+		/* if prepare chain failed */
 		if (!chain_ret) { 
-			Py_XDECREF(chains_keys_next);
-			Py_XDECREF(chains_keys_iter);
-			Py_XDECREF(chain_list); 
+			Py_XDECREF(chains_keys_iter); 
+			Py_XDECREF(chains_keys);
 			goto CLEAR;
 		}
-		chains_keys_next = PyIter_next(chains_keys_iter);
+		chains_keys_next = PyIter_Next(chains_keys_iter);
 	} 
+	Py_XDECREF(chains_keys);
 CLEAR:
-	PyErr_SetString(PyExc_OSError, "python generate error");
+	if (!PyErr_Occurred()) {
+		PyErr_SetString(PyExc_OSError, "python runtime error");
+	}
 	return NULL; 
 }
 
+PyDoc_STRVAR(iptables_get_info_doc, "get table information: hooks underflow location, num_entries");
+
+static PyObject *
+iptables_get_info(PyObject *object, PyObject *args)
+{
+	char *tablename; 
+	int sockfd;
+	socklen_t info_size;
+	struct ipt_getinfo *info;
+	PyObject *info_dict;
+
+	if (!PyArg_ParseTuple(args, "s:get_info", &tablename)) {
+		return NULL;
+	} 
+	if (strlen(tablename) >= XT_TABLE_MAXNAMELEN) { 
+		return NULL;
+	}
+	sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
+	if (sockfd < 0) {
+		PyErr_SetFromErrno(PyExc_OSError);
+		return NULL;
+	}
+	if (fcntl(sockfd, F_SETFD, FD_CLOEXEC) == -1) {
+		PyErr_SetFromErrno(PyExc_OSError);
+		return NULL;
+	}
+	info = PyMem_Malloc(sizeof(struct ipt_getinfo)); 
+	if (!info)
+		goto ERROR; 
+	info_size = sizeof(struct ipt_getinfo);
+	memset(info, 0, info_size);
+	strcpy(info->name, tablename);
+	if (getsockopt(sockfd, IPPROTO_IP,
+				IPT_SO_GET_INFO, info, &info_size) < 0) {
+		PyErr_SetFromErrno(PyExc_OSError);
+		PyMem_Free(info);
+		goto ERROR; 
+	} 
+	info_dict = PyDict_New();
+	PyDict_SetItemString(info_dict, "name", PyString_FromString(info->name));
+	PyDict_SetItemString(info_dict, "valid_hooks", PyInt_FromLong(info->valid_hooks));
+	PyDict_SetItemString(info_dict, "num_entries", PyInt_FromLong(info->num_entries));
+	PyDict_SetItemString(info_dict, "size", PyInt_FromLong(info->size));
+	PyObject *hook_entry_list = PyList_New(0);
+	PyObject *underflow_list = PyList_New(0);
+	int i = 0;
+	for(i; i < NF_IP_NUMHOOKS; i++) {
+		PyList_Append(hook_entry_list, PyInt_FromLong(info->hook_entry[i]));
+		PyList_Append(underflow_list, PyInt_FromLong(info->underflow[i]));
+	} 
+	PyDict_SetItemString(info_dict, "hook_entry", hook_entry_list);
+	PyDict_SetItemString(info_dict, "underflow", underflow_list);
+	return info_dict; 
+ERROR:
+	return NULL;
+}
+
+
 static PyMethodDef iptables_methods[] = {
+	{"get_info", (PyCFunction)iptables_get_info,
+		METH_VARARGS, iptables_get_info_doc},
 	{"get_table", (PyCFunction)iptables_get_table,
 		METH_VARARGS, iptables_get_table_doc},
 	{"replace_table", (PyCFunction)iptables_replace_table,
