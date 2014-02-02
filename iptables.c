@@ -40,6 +40,7 @@ struct replace_context {
 	struct ipt_replace *replace;
 	struct ipt_getinfo *info;
 	unsigned int current_offset;
+	unsigned int memory_size;
 };
 
 static const char *hooknames[] = {
@@ -454,15 +455,16 @@ iptables_replace_table(PyObject *object, PyObject *args)
 	PyObject *chains_keys; 
 	PyObject *tablename;
 	int sockfd; 
-	socklen_t info_size;
-	struct ipt_replace *replace;
+	socklen_t info_size; 
 	struct xt_counters_info *counter_info; 
 	struct ipt_getinfo *info;
+	struct ipt_replace replace;
 	struct replace_context context;
 
 	if (!PyArg_ParseTuple(args, "O|replace_table", &table_dict)) {
 		return NULL;
 	} 
+	/* check tablename */
 	tablename = PyDict_GetItemString(table_dict, "name");
 	if (!tablename) {
 		PyErr_SetString(PyExc_KeyError, "no table name in this table dict");
@@ -470,6 +472,11 @@ iptables_replace_table(PyObject *object, PyObject *args)
 	}
 	if (strlen(PyString_AsString(tablename)) >= XT_TABLE_MAXNAMELEN) { 
 		PyErr_SetString(PyExc_ValueError, "table name too big");
+		goto CLEAR;
+	}
+	chains_dict = PyDict_GetItemString(table_dict, "chains")
+	if (!chains_dict) {
+		PyErr_SetString(PyExc_KeyError, "no chains in table");
 		goto CLEAR;
 	}
 	sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
@@ -481,6 +488,7 @@ iptables_replace_table(PyObject *object, PyObject *args)
 		PyErr_SetFromErrno(PyExc_OSError);
 		goto CLEAR;
 	}
+	/* set ipt_info */
 	info = PyMem_Malloc(sizeof(struct ipt_getinfo)); 
 	if (!info)
 		goto CLEAR; 
@@ -493,18 +501,34 @@ iptables_replace_table(PyObject *object, PyObject *args)
 		PyMem_Free(info);
 		goto CLEAR; 
 	} 
-	context.replace = replace;	
+	/* initialize context */
+	memcpy(replace.name, PyString_AsString(tablename), PyString_Size(tablename)); 
+	context.replace = &replace;	
 	context.info = info;
 	context.current_offset = 0;
+	/* iter over chains */ 
 	chains_keys = PyDict_Keys(chains_dict);
+	replace.num_entries = PyList_Size(chains_key); 
+	context.memory_size = replace.num_entries * (sizeof(struct ipt_entry)\
+			+ sizeof(struct xt_entry_target)\
+			+ sizeof(struct xt_entry_match));
+	replace.entries = PyMem_Malloc(context.memory_size);
+	if (!replace.entries) {
+		PyMem_Free(info);
+		goto CLEAR;
+	}
 	PyObject *chains_keys_iter = PyObject_GetIter(chains_keys);
 	if (!chains_keys_iter) {
+		PyMem_Free(info);
+		PyMem_Free(replace.entries);
 		Py_XDECREF(chains_keys);
 		goto CLEAR;
 	}
 	PyObject *chains_keys_next = PyIter_Next(chains_keys_iter);
 	if (!chains_keys_next) {
-		Py_XDECREF(chains_keys_next);
+		PyMem_Free(info);
+		PyMem_Free(replace.entries);
+		Py_XDECREF(chains_keys); 
 		goto CLEAR;
 	}
 	while (chains_keys_next) {
@@ -515,6 +539,8 @@ iptables_replace_table(PyObject *object, PyObject *args)
 		Py_XDECREF(chains_keys_next); 
 		/* if prepare chain failed */
 		if (!chain_ret) { 
+			PyMem_Free(info);
+			PyMem_Free(replace.entries); 
 			Py_XDECREF(chains_keys_iter); 
 			Py_XDECREF(chains_keys);
 			goto CLEAR;
@@ -524,7 +550,7 @@ iptables_replace_table(PyObject *object, PyObject *args)
 	Py_XDECREF(chains_keys);
 CLEAR:
 	if (!PyErr_Occurred()) {
-		PyErr_SetString(PyExc_OSError, "python runtime error");
+		PyErr_SetString(PyExc_OSError, "iptables runtime error");
 	}
 	return NULL; 
 }
