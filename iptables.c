@@ -41,6 +41,8 @@ struct replace_context {
 	struct ipt_getinfo *info;
 	unsigned int current_offset;
 	unsigned int memory_size;
+	void *memory;
+	unsigned int last_chain_end;
 };
 
 static const char *hooknames[] = {
@@ -231,11 +233,11 @@ add_entry(struct ipt_entry *e, PyObject *chains_dict,
 	PyDict_SetItemString(rule_dict, "iniface",
 			PyString_FromString(e->ip.iniface));
 	PyDict_SetItemString(rule_dict, "iniface_mask",
-			PyString_FromStringAndSize(iniface_buffer, IFNAMSIZ));
+			PyByteArray_FromStringAndSize(iniface_buffer, IFNAMSIZ));
 	PyDict_SetItemString(rule_dict, "outiface",
 			PyString_FromString(e->ip.outiface));
 	PyDict_SetItemString(rule_dict, "outiface_mask",
-			PyString_FromStringAndSize(outiface_buffer, IFNAMSIZ));
+			PyByteArray_FromStringAndSize(outiface_buffer, IFNAMSIZ));
 	PyDict_SetItemString(rule_dict, "protocol",
 			PyInt_FromLong(e->ip.proto));
 	PyDict_SetItemString(rule_dict, "flags",
@@ -430,19 +432,89 @@ ERROR:
 
 
 static int
-prepare_rule(struct replace_context *context, PyObject *chains_dict, PyObject *chain_list)
+compile_rule(PyObject *rule_dict, struct ipt_entry *this_entry, unsigned int *current_offset)
 {
-
+	/*convert entry, match, target plugins */
+	this_entry->ip.src.s_addr = PyInt_AsLong(PyDict_GetItemString(rule_dict, "srcip"));
+	this_entry->ip.dst.s_addr = PyInt_AsLong(PyDict_GetItemString(rule_dict, "dstip"));
+	this_entry->ip.smsk.s_addr = PyInt_AsLong(PyDict_GetItemString(rule_dict, "srcip_mask"));
+	this_entry->ip.dmsk.s_addr = PyInt_AsLong(PyDict_GetItemString(rule_dict, "dstip_mask"));
+	/*bug char * , unsgined char */
+	strcpy(this_entry->ip.iniface, PyString_AsString(PyDict_GetItemString(rule_dict, "iniface")));
+	strcpy(this_entry->ip.outiface,  PyString_AsString(PyDict_GetItemString(rule_dict, "outiface")));
+	strcpy((char *)this_entry->ip.iniface_mask, PyByteArray_AsString(PyDict_GetItemString(rule_dict, "iniface_mask")));
+	strcpy((char *)this_entry->ip.outiface_mask,  PyByteArray_AsString(PyDict_GetItemString(rule_dict, "outiface_mask"))); 
+	this_entry->ip.proto = PyInt_AsLong(PyDict_GetItemString(rule_dict, "protocol"));	
+	this_entry->ip.flags = PyInt_AsLong(PyDict_GetItemString(rule_dict, "flags"));
+	this_entry->ip.invflags = PyInt_AsLong(PyDict_GetItemString(rule_dict, "invflags"));
+	return 1;
+CLEAR:
+	return 0; 
 }
 
 static int 
-prepare_chain(struct replace_context *context, PyObject *chains_dict, PyObject *chain_list)
+compile_chain(struct replace_context *context, PyObject *chain_name,  PyObject *rule_list)
 {
-	if (!chain_list) {
+	PyObject *chain_offset;
+	PyObject *rule0_dict; 
+	int chain_header_offset;
+	unsigned int current_offset;
+	struct ipt_entry *chain_header; 
+	struct ipt_entry *chain_footer;	
+	if (!rule_list) {
 		goto CLEAR;
 	} 
+	PyObject *rule_list_iter = PyObject_GetIter(rule_list); 
+	if (!rule_list_iter) {
+		goto CLEAR;
+	}
+	current_offset = 0;
+	PyObject *rule_list_next = PyIter_Next(rule_list_iter);
+	while(rule_list_next) { 
+		struct ipt_entry *this_entry = context->memory;
+		if(!this_entry) {
+			Py_XDECREF(rule_list_iter); 
+			goto CLEAR;
+		}
+		int rule_ret = compile_rule(rule_list_next, this_entry, &current_offset);
+		Py_XDECREF(rule_list_next);
+		if(!rule_ret) {
+			Py_XDECREF(rule_list_iter); 
+			goto CLEAR;
+		} 
+		rule_list_next = PyIter_Next(rule_list_iter);
+	}
+	rule0_dict = PyList_GetItem(rule_list, 0);	
+	chain_offset = PyDict_GetItemString(rule0_dict, "offset"); 
+	chain_header_offset = PyInt_AsLong(chain_offset);
+	int i; 
+	for (i = 0; i < NF_IP_NUMHOOKS; i++) { 
+		if ((context->info->valid_hooks & (1 << i))
+			&& ((context->info->hook_entry[i]) == chain_header_offset)) { 
+			i = -1;
+			break;
+		}
+	}
+	/* only user-defined chains have header */		
+	if (i > 0) {
+		/*
+		chain_header = context->memory;	
+		chain_header->target_offset = sizeof(struct ipt_entry);
+		chain_header->next_offset = (sizeof(struct ipt_entry) +\
+				XT_ALIGN(sizeof(struct xt_error_target)));
+		strcpy(chain_header->name.target.u.user.name, "ERROR");
+		chain_header->name.target.u.target_size = XT_ALIGN(sizeof(struct xt_error_target));
+		strcpy(chain_header->name.errorname, PyString_AsString(chain_name)); 
+		*/
+	} else {
+		
+	}
+	
 CLEAR:	
-	return NULL; 
+	if (!PyErr_Occurred()) {
+		PyErr_SetString(PyExc_OSError, "iptables runtime error");
+	}
+	return 0; 
 }
 
 PyDoc_STRVAR(iptables_replace_table_doc, "replace this table in kernel");
@@ -458,7 +530,7 @@ iptables_replace_table(PyObject *object, PyObject *args)
 	socklen_t info_size; 
 	struct xt_counters_info *counter_info; 
 	struct ipt_getinfo *info;
-	struct ipt_replace replace;
+	struct ipt_replace *replace;
 	struct replace_context context;
 
 	if (!PyArg_ParseTuple(args, "O|replace_table", &table_dict)) {
@@ -474,7 +546,7 @@ iptables_replace_table(PyObject *object, PyObject *args)
 		PyErr_SetString(PyExc_ValueError, "table name too big");
 		goto CLEAR;
 	}
-	chains_dict = PyDict_GetItemString(table_dict, "chains")
+	chains_dict = PyDict_GetItemString(table_dict, "chains");
 	if (!chains_dict) {
 		PyErr_SetString(PyExc_KeyError, "no chains in table");
 		goto CLEAR;
@@ -501,46 +573,54 @@ iptables_replace_table(PyObject *object, PyObject *args)
 		PyMem_Free(info);
 		goto CLEAR; 
 	} 
+	replace = PyMem_Malloc(sizeof(struct ipt_replace));
+	if(!replace) {
+		PyMem_Free(info);
+		goto CLEAR;
+	}
 	/* initialize context */
-	memcpy(replace.name, PyString_AsString(tablename), PyString_Size(tablename)); 
-	context.replace = &replace;	
+	memcpy(replace->name, PyString_AsString(tablename), PyString_Size(tablename)); 
+	context.replace = replace;	
 	context.info = info;
 	context.current_offset = 0;
 	/* iter over chains */ 
 	chains_keys = PyDict_Keys(chains_dict);
-	replace.num_entries = PyList_Size(chains_key); 
-	context.memory_size = replace.num_entries * (sizeof(struct ipt_entry)\
+	replace->num_entries = PyList_Size(chains_keys); 
+	context.memory_size = replace->num_entries * (sizeof(struct ipt_entry)\
 			+ sizeof(struct xt_entry_target)\
 			+ sizeof(struct xt_entry_match));
-	replace.entries = PyMem_Malloc(context.memory_size);
-	if (!replace.entries) {
+	context.memory = PyMem_Malloc(context.memory_size);
+	if (!context.memory) {
 		PyMem_Free(info);
+		PyMem_Free(replace);
 		goto CLEAR;
 	}
 	PyObject *chains_keys_iter = PyObject_GetIter(chains_keys);
 	if (!chains_keys_iter) {
 		PyMem_Free(info);
-		PyMem_Free(replace.entries);
+		PyMem_Free(replace);
+		PyMem_Free(context.memory);
 		Py_XDECREF(chains_keys);
 		goto CLEAR;
 	}
 	PyObject *chains_keys_next = PyIter_Next(chains_keys_iter);
 	if (!chains_keys_next) {
 		PyMem_Free(info);
-		PyMem_Free(replace.entries);
+		PyMem_Free(replace);
+		PyMem_Free(context.memory);
 		Py_XDECREF(chains_keys); 
 		goto CLEAR;
 	}
 	while (chains_keys_next) {
 		/* handle chains*/
-		PyObject *chain_list = PyDict_GetItem(chains_dict, chains_keys_next); 
-		int chain_ret = prepare_chain(&context, chains_dict, chain_list); 
-		Py_XDECREF(chain_list); 
+		PyObject *rule_list = PyDict_GetItem(chains_dict, chains_keys_next); 
+		int chain_ret = compile_chain(&context, chains_keys_next, rule_list); 
 		Py_XDECREF(chains_keys_next); 
 		/* if prepare chain failed */
 		if (!chain_ret) { 
 			PyMem_Free(info);
-			PyMem_Free(replace.entries); 
+			PyMem_Free(replace);
+			PyMem_Free(context.memory); 
 			Py_XDECREF(chains_keys_iter); 
 			Py_XDECREF(chains_keys);
 			goto CLEAR;
@@ -600,8 +680,8 @@ iptables_get_info(PyObject *object, PyObject *args)
 	PyDict_SetItemString(info_dict, "size", PyInt_FromLong(info->size));
 	PyObject *hook_entry_list = PyList_New(0);
 	PyObject *underflow_list = PyList_New(0);
-	int i = 0;
-	for(i; i < NF_IP_NUMHOOKS; i++) {
+	int i;
+	for(i=0; i < NF_IP_NUMHOOKS; i++) {
 		PyList_Append(hook_entry_list, PyInt_FromLong(info->hook_entry[i]));
 		PyList_Append(underflow_list, PyInt_FromLong(info->underflow[i]));
 	} 
