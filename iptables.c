@@ -36,6 +36,12 @@
 #define HOOK_POST_ROUTING	NF_IP_POST_ROUTING 
 
 
+struct replace_context {
+	struct ipt_replace *replace;
+	struct ipt_getinfo *info;
+	unsigned int current_offset;
+};
+
 static const char *hooknames[] = {
 	[HOOK_PRE_ROUTING]	= "PREROUTING",
 	[HOOK_LOCAL_IN]		= "INPUT",
@@ -260,7 +266,7 @@ add_entry(struct ipt_entry *e, PyObject *chains_dict,
 		Py_XDECREF(rule_dict);	
 		return 0;
 	} else if ((builtin = entry_is_hook_entry(e, info, entries)) != 0) {
-		*current_chain_ptr = PyList_New(0);
+		*current_chain_ptr = PyList_New(0); 
 		PyDict_SetItemString(chains_dict,
 				(char *)hooknames[builtin-1],
 				*current_chain_ptr); 
@@ -337,7 +343,7 @@ parse_entries(struct ipt_getinfo *info, struct ipt_get_entries *entries)
 			PyString_FromString(XTABLES_VERSION));		
 	PyDict_SetItemString(table_dict, "blobsize",
 			PyInt_FromLong(entries->size));
-	PyDict_SetItemString(table_dict, "tablename",
+	PyDict_SetItemString(table_dict, "name",
 			PyString_FromString(info->name)); 
 
 	chains_dict = PyDict_New();
@@ -420,8 +426,16 @@ ERROR:
 	return NULL;
 }
 
-static PyObject *
-prepare_chain(struct ipt_replace *replace, PyObject *chains_dict, PyObject *chain_list)
+
+
+static int
+prepare_rule(struct replace_context *context, PyObject *chains_dict, PyObject *chain_list)
+{
+
+}
+
+static int 
+prepare_chain(struct replace_context *context, PyObject *chains_dict, PyObject *chain_list)
 {
 	if (!chain_list) {
 		goto CLEAR;
@@ -435,13 +449,53 @@ PyDoc_STRVAR(iptables_replace_table_doc, "replace this table in kernel");
 static PyObject *
 iptables_replace_table(PyObject *object, PyObject *args)
 {
+	PyObject *table_dict;
 	PyObject *chains_dict;
-	PyObject *chains_keys;
+	PyObject *chains_keys; 
+	PyObject *tablename;
+	int sockfd; 
+	socklen_t info_size;
 	struct ipt_replace *replace;
-	struct xt_counters_info *_counter_info; 
-	if (!PyArg_ParseTuple(args, "O|replace_table", &chains_dict)) {
+	struct xt_counters_info *counter_info; 
+	struct ipt_getinfo *info;
+	struct replace_context context;
+
+	if (!PyArg_ParseTuple(args, "O|replace_table", &table_dict)) {
 		return NULL;
+	} 
+	tablename = PyDict_GetItemString(table_dict, "name");
+	if (!tablename) {
+		PyErr_SetString(PyExc_KeyError, "no table name in this table dict");
+		goto CLEAR; 
 	}
+	if (strlen(PyString_AsString(tablename)) >= XT_TABLE_MAXNAMELEN) { 
+		PyErr_SetString(PyExc_ValueError, "table name too big");
+		goto CLEAR;
+	}
+	sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
+	if (sockfd < 0) {
+		PyErr_SetFromErrno(PyExc_OSError);
+		goto CLEAR;
+	}
+	if (fcntl(sockfd, F_SETFD, FD_CLOEXEC) == -1) {
+		PyErr_SetFromErrno(PyExc_OSError);
+		goto CLEAR;
+	}
+	info = PyMem_Malloc(sizeof(struct ipt_getinfo)); 
+	if (!info)
+		goto CLEAR; 
+	info_size = sizeof(struct ipt_getinfo);
+	memset(info, 0, info_size);
+	strcpy(info->name, PyString_AsString(tablename));
+	if (getsockopt(sockfd, IPPROTO_IP,
+				IPT_SO_GET_INFO, info, &info_size) < 0) {
+		PyErr_SetFromErrno(PyExc_OSError);
+		PyMem_Free(info);
+		goto CLEAR; 
+	} 
+	context.replace = replace;	
+	context.info = info;
+	context.current_offset = 0;
 	chains_keys = PyDict_Keys(chains_dict);
 	PyObject *chains_keys_iter = PyObject_GetIter(chains_keys);
 	if (!chains_keys_iter) {
@@ -456,7 +510,7 @@ iptables_replace_table(PyObject *object, PyObject *args)
 	while (chains_keys_next) {
 		/* handle chains*/
 		PyObject *chain_list = PyDict_GetItem(chains_dict, chains_keys_next); 
-		PyObject *chain_ret = prepare_chain(replace, chains_dict, chain_list); 
+		int chain_ret = prepare_chain(&context, chains_dict, chain_list); 
 		Py_XDECREF(chain_list); 
 		Py_XDECREF(chains_keys_next); 
 		/* if prepare chain failed */
@@ -527,6 +581,7 @@ iptables_get_info(PyObject *object, PyObject *args)
 	} 
 	PyDict_SetItemString(info_dict, "hook_entry", hook_entry_list);
 	PyDict_SetItemString(info_dict, "underflow", underflow_list);
+	PyMem_Free(info);
 	return info_dict; 
 ERROR:
 	return NULL;
