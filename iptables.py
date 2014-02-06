@@ -1,88 +1,90 @@
-import iptables
+import _iptables
 import pprint
+import os
 import pdb
+import sys
 from cStringIO import StringIO
 
 jump_table = {
         }
 
 protocol_dict = {
-        iptables.IPPROTO_IP: "IP",
-        iptables.IPPROTO_ICMP: "ICMP",
-        iptables.IPPROTO_IGMP: "IGMP",
-        iptables.IPPROTO_IPIP: "IPIP",
-        iptables.IPPROTO_TCP: "TCP",
-        iptables.IPPROTO_EGP: "EGP",
-        iptables.IPPROTO_PUP: "PUP",
-        iptables.IPPROTO_UDP: "UDP",
-        iptables.IPPROTO_IDP: "IDP",
-        iptables.IPPROTO_DCCP: "DCCP",
-        iptables.IPPROTO_RSVP: "RSVP",
-        iptables.IPPROTO_GRE: "GRE",
-        iptables.IPPROTO_IPV6: "IPV6",
-        iptables.IPPROTO_ESP: "ESP",
-        iptables.IPPROTO_AH: "AH",
-        iptables.IPPROTO_PIM: "PIM",
-        iptables.IPPROTO_COMP: "COMP",
-        iptables.IPPROTO_SCTP: "SCTP",
-        iptables.IPPROTO_UDPLITE: "UDPLITE",
-        iptables.IPPROTO_RAW: "RAW"
+        _iptables.IPPROTO_IP: "IP",
+        _iptables.IPPROTO_ICMP: "ICMP",
+        _iptables.IPPROTO_IGMP: "IGMP",
+        _iptables.IPPROTO_IPIP: "IPIP",
+        _iptables.IPPROTO_TCP: "TCP",
+        _iptables.IPPROTO_EGP: "EGP",
+        _iptables.IPPROTO_PUP: "PUP",
+        _iptables.IPPROTO_UDP: "UDP",
+        _iptables.IPPROTO_IDP: "IDP",
+        _iptables.IPPROTO_DCCP: "DCCP",
+        _iptables.IPPROTO_RSVP: "RSVP",
+        _iptables.IPPROTO_GRE: "GRE",
+        _iptables.IPPROTO_IPV6: "IPV6",
+        _iptables.IPPROTO_ESP: "ESP",
+        _iptables.IPPROTO_AH: "AH",
+        _iptables.IPPROTO_PIM: "PIM",
+        _iptables.IPPROTO_COMP: "COMP",
+        _iptables.IPPROTO_SCTP: "SCTP",
+        _iptables.IPPROTO_UDPLITE: "UDPLITE",
+        _iptables.IPPROTO_RAW: "RAW"
         }
 
 ctstate_dict = {
-        iptables.CT_ESTABLISHED: "ESTABLISHED",
-        iptables.CT_INVALID: "INVALID",
-        iptables.CT_NEW: "NEW",
-        iptables.CT_RELATED: "RELATED",
-        iptables.CT_UNTRACKED: "UNTRACKED",
-        iptables.CT_DNAT: "DNAT",
-        iptables.CT_SNAT: "SNAT"
+        _iptables.CT_ESTABLISHED: "ESTABLISHED",
+        _iptables.CT_INVALID: "INVALID",
+        _iptables.CT_NEW: "NEW",
+        _iptables.CT_RELATED: "RELATED",
+        _iptables.CT_UNTRACKED: "UNTRACKED",
+        _iptables.CT_DNAT: "DNAT",
+        _iptables.CT_SNAT: "SNAT"
         }
 
 tcp_flags_dict = { 
-        iptables.TCP_FLAG_ACK: "ACK",
-        iptables.TCP_FLAG_FIN: "FIN",
-        iptables.TCP_FLAG_NONE: "NONE",
-        iptables.TCP_FLAG_PSH: "PSH",
-        iptables.TCP_FLAG_RST: "RST",
-        iptables.TCP_FLAG_SYN: "SYN",
-        iptables.TCP_FLAG_URG: "URG"
+        _iptables.TCP_FLAG_ACK: "ACK",
+        _iptables.TCP_FLAG_FIN: "FIN",
+        _iptables.TCP_FLAG_NONE: "NONE",
+        _iptables.TCP_FLAG_PSH: "PSH",
+        _iptables.TCP_FLAG_RST: "RST",
+        _iptables.TCP_FLAG_SYN: "SYN",
+        _iptables.TCP_FLAG_URG: "URG"
         }
 
 pkttype_dict = {
-        iptables.PACKET_HOST: "host",
-        iptables.PACKET_BROADCAST: "broadcast",
-        iptables.PACKET_MULTICAST: "multicast",
-        iptables.PACKET_OTHERHOST: "othercast",
-        iptables.PACKET_OUTGOING: "outgoing"
+        _iptables.PACKET_HOST: "host",
+        _iptables.PACKET_BROADCAST: "broadcast",
+        _iptables.PACKET_MULTICAST: "multicast",
+        _iptables.PACKET_OTHERHOST: "othercast",
+        _iptables.PACKET_OUTGOING: "outgoing"
         }
 
 log_dict = {
-        iptables.LOG_ALERT: "alert",
-        iptables.LOG_CRIT: "crit",
-        iptables.LOG_DEBUG: "debug",
-        iptables.LOG_EMERG: "emerg",
-        iptables.LOG_ERR: "err",
-        iptables.LOG_INFO: "info",
-        iptables.LOG_NOTICE: "notice",
-        iptables.LOG_WARNING: "warning",
-        iptables.LOG_TCPSEQ: "tcp-seq",
-        iptables.LOG_TCPOPT: "tcp-opt",
-        iptables.LOG_IPOPT: "ip-opt",
-        iptables.LOG_UID: "uid",
-        iptables.LOG_MACDECODE: "mac-decode"
+        _iptables.LOG_ALERT: "alert",
+        _iptables.LOG_CRIT: "crit",
+        _iptables.LOG_DEBUG: "debug",
+        _iptables.LOG_EMERG: "emerg",
+        _iptables.LOG_ERR: "err",
+        _iptables.LOG_INFO: "info",
+        _iptables.LOG_NOTICE: "notice",
+        _iptables.LOG_WARNING: "warning",
+        _iptables.LOG_TCPSEQ: "tcp-seq",
+        _iptables.LOG_TCPOPT: "tcp-opt",
+        _iptables.LOG_IPOPT: "ip-opt",
+        _iptables.LOG_UID: "uid",
+        _iptables.LOG_MACDECODE: "mac-decode"
         }
 
 reject_dict = {
-        iptables.IPT_ICMP_NET_UNREACHABLE: "icmp-net-unreachable",
-        iptables.IPT_ICMP_HOST_UNREACHABLE: "icmp-host-unreachable",
-        iptables.IPT_ICMP_PROT_UNREACHABLE: "icmp-prot_unreachable",
-        iptables.IPT_ICMP_PORT_UNREACHABLE: "icmp-port_unreachable",
-        iptables.IPT_ICMP_ECHOREPLY: "icmp_echoreply",
-        iptables.IPT_ICMP_NET_PROHIBITED: "icmp-net-prohibited",
-        iptables.IPT_ICMP_HOST_PROHIBITED: "icmp-host-prohibited",
-        iptables.IPT_TCP_RESET: "tcp-reset",
-        iptables.IPT_ICMP_ADMIN_PROHIBITED: "icmp_admin_prohibited"
+        _iptables.IPT_ICMP_NET_UNREACHABLE: "icmp-net-unreachable",
+        _iptables.IPT_ICMP_HOST_UNREACHABLE: "icmp-host-unreachable",
+        _iptables.IPT_ICMP_PROT_UNREACHABLE: "icmp-prot_unreachable",
+        _iptables.IPT_ICMP_PORT_UNREACHABLE: "icmp-port_unreachable",
+        _iptables.IPT_ICMP_ECHOREPLY: "icmp_echoreply",
+        _iptables.IPT_ICMP_NET_PROHIBITED: "icmp-net-prohibited",
+        _iptables.IPT_ICMP_HOST_PROHIBITED: "icmp-host-prohibited",
+        _iptables.IPT_TCP_RESET: "tcp-reset",
+        _iptables.IPT_ICMP_ADMIN_PROHIBITED: "icmp_admin_prohibited"
         }
 
 icmp_code_dict = {
@@ -93,14 +95,14 @@ icmp_code_dict = {
                 "name": "any"
                 } 
             ],
-        iptables.ICMP_ECHOREPLY: [
+        _iptables.ICMP_ECHOREPLY: [
             {
                 "min": 0x0,
                 "max": 0xff,
                 "name": "echo-reply"
                 }
             ],
-        iptables.ICMP_DEST_UNREACH: [
+        _iptables.ICMP_DEST_UNREACH: [
             {
                 "min": 0x0,
                 "max": 0xff,
@@ -182,14 +184,14 @@ icmp_code_dict = {
                 "name": "precedence-cutoff"
                 } 
             ], 
-        iptables.ICMP_SOURCE_QUENCH: [
+        _iptables.ICMP_SOURCE_QUENCH: [
             {
                 "min": 0x0,
                 "max": 0xff,
                 "name": "source-quench"
                 }
             ],
-        iptables.ICMP_REDIRECT: [
+        _iptables.ICMP_REDIRECT: [
             {
                 "min": 0x0,
                 "max": 0xff,
@@ -216,14 +218,14 @@ icmp_code_dict = {
                 "name": "tos-host-rediect"
                 }
             ],
-        iptables.ICMP_ECHO: [
+        _iptables.ICMP_ECHO: [
             {
                 "min": 0x0,
                 "max": 0xff,
                 "name": "echo-request"
                 }
             ],
-        iptables.ICMP_TIME_EXCEEDED: [
+        _iptables.ICMP_TIME_EXCEEDED: [
             {
                 "min": 0x0,
                 "max": 0xff,
@@ -240,7 +242,7 @@ icmp_code_dict = {
                 "name": "ttl-zero-during-reassembly"
                 }
             ], 
-        iptables.ICMP_PARAMETERPROB: [
+        _iptables.ICMP_PARAMETERPROB: [
             {
                 "min": 0x0,
                 "max": 0xff,
@@ -257,28 +259,28 @@ icmp_code_dict = {
                 "name": "required-option-missing"
                 }
             ],
-        iptables.ICMP_TIMESTAMP: [
+        _iptables.ICMP_TIMESTAMP: [
             {
                 "min": 0x0,
                 "max": 0xff,
                 "name": "timestamp-request"
                 }
             ],
-        iptables.ICMP_TIMESTAMPREPLY: [
+        _iptables.ICMP_TIMESTAMPREPLY: [
             {
                 "min": 0x0,
                 "max": 0xff,
                 "name": "timestamp-reply"
                 }
             ],
-        iptables.ICMP_ADDRESS: [
+        _iptables.ICMP_ADDRESS: [
             {
                 "min": 0x0,
                 "max": 0xff,
                 "name": "address-mask-request"
                 }
             ],
-        iptables.ICMP_ADDRESSREPLY: [
+        _iptables.ICMP_ADDRESSREPLY: [
             {
                 "min": 0x0,
                 "max": 0xff,
@@ -287,6 +289,41 @@ icmp_code_dict = {
             ] 
         }
 
+
+def all_avaiable_modules():
+    result = []
+    for root, dirs, files in os.walk("/lib/modules/%s/kernel/net" % os.uname()[2]):
+        result.extend([x[8:-3] for x in files if x.startswith("iptable_")])
+    return list(set(result))
+
+def is_module_in_kernel(module):
+    try:
+        f = open("/proc/net/ip_tables_names", "r")
+        modules = f.read()
+        f.close()
+    except Exception as e:
+        raise Exception("read /proc/net/ip_tables_names failed")
+       
+    if module in modules:
+        return True
+    else:
+        return False
+    
+
+def load_iptables_module(module): 
+    try:
+        f = open("/proc/sys/kernel/modprobe", "r")
+        modprobe = f.read().strip("\n")
+        f.close()
+    except Exception as e:
+        raise Exception("find modprobe failed with %s", str(e))
+      
+    if not os.fork():
+        os.execvp(modprobe, ["modprobe", "iptable_%s" % module])
+        exit()
+    pid, reason = os.wait()
+    if (reason >> 8):
+        raise Exception("failed to load module %s" % module) 
 
 def handle_matches(rule_buffer, match_tuple):
     match, value = match_tuple
@@ -305,12 +342,12 @@ def handle_matches(rule_buffer, match_tuple):
         invflags = value["invflags"]
         if value["dpts"] != (0, 65535):
             ft = "--dports: %s " % "-".join([str(x) for x in value["dpts"]])
-            if invflags & iptables.XT_TCP_INV_DSTPT:
+            if invflags & _iptables.XT_TCP_INV_DSTPT:
                 ft = "not " + ft
             tcp_buffer.write(ft)
         if value["spts"] != (0, 65535):
             ft = "--sports: %s " % "-".join([str(x) for x in value["spts"]])
-            if invflags & iptables.XT_TCP_INV_SRCPT:
+            if invflags & _iptables.XT_TCP_INV_SRCPT:
                 ft = "not " + ft
             tcp_buffer.write(ft)
         if value["flag_cmp"]: 
@@ -319,12 +356,12 @@ def handle_matches(rule_buffer, match_tuple):
             ft = "--tcp-flags %s/%s " % (
                     " ".join([tcp_flags_dict[x] for x in tcp_flags_dict if x & flags]),
                     ",".join([tcp_flags_dict[x] for x in tcp_flags_dict if x & mask]))
-            if invflags & iptables.XT_TCP_INV_FLAGS: 
+            if invflags & _iptables.XT_TCP_INV_FLAGS: 
                 ft = "not " + ft
             tcp_buffer.write(ft) 
         if value["options"]:
             ft = "--tcp-option %s " % value["options"]
-            if invflags & iptables.XT_TCP_INV_OPTION:
+            if invflags & _iptables.XT_TCP_INV_OPTION:
                 ft = "not " + ft
             tcp_buffer.write(ft)
         rule_buffer.write(tcp_buffer.getvalue())
@@ -339,12 +376,12 @@ def handle_matches(rule_buffer, match_tuple):
             for i in icmp_code_dict[typev]:
                 if minv == i["min"] and maxv == i["max"]:
                     ft = "--type %s " % i["name"]
-                    if value["invflags"] & iptables.IPT_ICMP_INV:
+                    if value["invflags"] & _iptables.IPT_ICMP_INV:
                         ft = "not " + ft
                     icmp_buffer.write(ft)
         else:
             ft = "--type %d %d/%d " % (i["type"],i["min"], i["max"])
-            if value["invflags"] & iptables.IPT_ICMP_INV:
+            if value["invflags"] & _iptables.IPT_ICMP_INV:
                 ft = "not " + ft
             icmp_buffer.write(ft)
         rule_buffer.write(icmp_buffer.getvalue())
@@ -366,27 +403,27 @@ def handle_rule(rule_buffer, rule_dict):
     invflags = rule_dict["invflags"]
     if rule_dict["dstip"]:                     
         ft = "-dstip %s/%s " % (rule_dict["dstip"], rule_dict["dstip_mask"])
-        if invflags & iptables.IPT_INV_DSTIP:
+        if invflags & _iptables.IPT_INV_DSTIP:
             ft = "not " + ft
         rule_buffer.write(ft)
     if rule_dict["srcip"]:
         ft = "-srcip %s/%s " % (rule_dict["srcip"], rule_dict["srcip_mask"])
-        if invflags & iptables.IPT_INV_SRCIP:
+        if invflags & _iptables.IPT_INV_SRCIP:
             ft = "not " + ft 
         rule_buffer.write(ft)
     if rule_dict["iniface"]:
         ft = "-i %s " % (rule_dict["iniface"])
-        if invflags & iptables.IPT_INV_VIA_IN:
+        if invflags & _iptables.IPT_INV_VIA_IN:
             ft = "not " + ft 
         rule_buffer.write(ft) 
     if rule_dict["outiface"]:
         ft = "-o %s " % (rule_dict["outiface"])
-        if invflags & iptables.IPT_INV_VIA_OUT:
+        if invflags & _iptables.IPT_INV_VIA_OUT:
             ft = "not " + ft
         rule_buffer.write(ft) 
     if rule_dict["protocol"]:
         ft = "-proto %s " % protocol_dict[rule_dict["protocol"]]
-        if invflags & iptables.XT_INV_PROTO:
+        if invflags & _iptables.XT_INV_PROTO:
             ft = "not " + ft
         rule_buffer.write(ft)
     if rule_dict["flags"]:
@@ -423,7 +460,7 @@ def handle_rule(rule_buffer, rule_dict):
 
 
 def handle_chains(table):
-    t = iptables.get_table(table) 
+    t = _iptables.get_table(table) 
     #jump table
     chains = t["chains"].items()
     chain2offset = {}
@@ -444,4 +481,13 @@ def handle_chains(table):
             print rule_buffer.getvalue()
             rule_buffer.close() 
 
-handle_chains("filter")
+if __name__ == "__main__": 
+    if len(sys.argv) < 3:
+        print "usage: iptables.py -t table"
+        exit(1)
+    arg1 = sys.argv[1]
+    arg2 = sys.argv[2]
+    if arg1 == "-t":
+        handle_chains(arg2)
+    else: 
+        print "usage: iptables.py -t table"

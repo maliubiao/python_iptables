@@ -1,7 +1,7 @@
 #! /usr/bin/env python
 from distutils.core import setup, Extension
 
-m = Extension('iptables',
+m = Extension('_iptables',
         sources = ['iptables.c'] 
         )
 

@@ -442,8 +442,10 @@ compile_rule(PyObject *rule_dict, struct ipt_entry *this_entry, unsigned int *cu
 	/*bug char * , unsgined char */
 	strcpy(this_entry->ip.iniface, PyString_AsString(PyDict_GetItemString(rule_dict, "iniface")));
 	strcpy(this_entry->ip.outiface,  PyString_AsString(PyDict_GetItemString(rule_dict, "outiface")));
-	strcpy((char *)this_entry->ip.iniface_mask, PyByteArray_AsString(PyDict_GetItemString(rule_dict, "iniface_mask")));
-	strcpy((char *)this_entry->ip.outiface_mask,  PyByteArray_AsString(PyDict_GetItemString(rule_dict, "outiface_mask"))); 
+	PyObject *iniface_mask = PyDict_GetItemString(rule_dict, "iniface_mask");
+	memcpy(this_entry->ip.iniface_mask, PyByteArray_AsString(iniface_mask), PyByteArray_Size(iniface_mask));
+	PyObject *outiface_mask = PyDict_GetItemString(rule_dict, "outiface_mask");
+	memcpy(this_entry->ip.outiface_mask,  PyByteArray_AsString(outiface_mask), PyByteArray_Size(outiface_mask)); 
 	this_entry->ip.proto = PyInt_AsLong(PyDict_GetItemString(rule_dict, "protocol"));	
 	this_entry->ip.flags = PyInt_AsLong(PyDict_GetItemString(rule_dict, "flags"));
 	this_entry->ip.invflags = PyInt_AsLong(PyDict_GetItemString(rule_dict, "invflags"));
@@ -704,10 +706,10 @@ static PyMethodDef iptables_methods[] = {
 	{NULL, NULL, 0, NULL}
 };
 
-PyMODINIT_FUNC initiptables(void)
+PyMODINIT_FUNC init_iptables(void)
 {
 	PyObject *m;
-	m = Py_InitModule("iptables", iptables_methods);
+	m = Py_InitModule("_iptables", iptables_methods);
 	if (m != NULL) {
 	PyModule_AddObject(m, "IPT_F_FRAG", PyInt_FromLong(IPT_F_FRAG));
 	PyModule_AddObject(m, "IPT_F_GOTO", PyInt_FromLong(IPT_F_GOTO));
