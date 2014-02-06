@@ -430,10 +430,28 @@ ERROR:
 }
 
 
+static int 
+compile_match(void *base, PyObject *this_match,unsigned int *match_offset) 
+{
+	/*supress gcc warning*/
+	struct xt_entry_match *match_entry_base = base;
+	const char *keystr = NULL;
+	PyObject *key = PyTuple_GetItem(this_match, 0);
+	PyObject *value = PyTuple_GetItem(this_match, 1);
+	if (key == NULL | value == NULL) {
+		return 0;
+	}
+	keystr = PyString_AsString(key);
+	if (strcmp(keystr, "tcp") == 0) {
+		/* tcp match plugin */	
+	}
+	return 1;
+}
 
 static int
 compile_rule(PyObject *rule_dict, struct ipt_entry *this_entry, unsigned int *current_offset)
-{
+{ 
+	struct xt_entry_match *match_entry_base = NULL;
 	/*convert entry, match, target plugins */
 	this_entry->ip.src.s_addr = PyInt_AsLong(PyDict_GetItemString(rule_dict, "srcip"));
 	this_entry->ip.dst.s_addr = PyInt_AsLong(PyDict_GetItemString(rule_dict, "dstip"));
@@ -449,6 +467,25 @@ compile_rule(PyObject *rule_dict, struct ipt_entry *this_entry, unsigned int *cu
 	this_entry->ip.proto = PyInt_AsLong(PyDict_GetItemString(rule_dict, "protocol"));	
 	this_entry->ip.flags = PyInt_AsLong(PyDict_GetItemString(rule_dict, "flags"));
 	this_entry->ip.invflags = PyInt_AsLong(PyDict_GetItemString(rule_dict, "invflags"));
+	this_entry->counters.pcnt = PyInt_AsLong(PyDict_GetItemString(rule_dict, "packets"));
+	this_entry->counters.bcnt = PyInt_AsLong(PyDict_GetItemString(rule_dict, "bytes"));
+	this_entry->nfcache = PyInt_AsLong(PyDict_GetItemString(rule_dict, "bytes"));	
+	/*iter over matches */
+	match_entry_base = (void *)this_entry + sizeof(struct ipt_entry);
+	PyObject *matches_dict = PyDict_GetItemString(rule_dict, "matches");
+	PyObject *matches_dict_iter = PyObject_GetIter(PyDict_Items(matches_dict));
+	unsigned int match_offset;
+	int ret;
+	PyObject *matches_dict_next = PyIter_Next(matches_dict_iter);
+	while (matches_dict_next) {
+		ret = compile_match(match_entry_base, matches_dict_next, &match_offset);
+		Py_XDECREF(matches_dict_next);
+		if (!ret) {
+			Py_XDECREF(matches_dict_iter);	
+			goto CLEAR;
+		}
+		matches_dict_next = PyIter_Next(matches_dict_iter); 
+	}
 	return 1;
 CLEAR:
 	return 0; 
