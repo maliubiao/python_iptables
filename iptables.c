@@ -431,19 +431,98 @@ ERROR:
 
 
 static int 
-compile_match(void *base, PyObject *this_match,unsigned int *match_offset) 
+compile_match(void *base, PyObject *this_match) 
 {
 	/*supress gcc warning*/
-	struct xt_entry_match *match_entry_base = base;
+	struct xt_entry_match *match_entry = base;
 	const char *keystr = NULL;
-	PyObject *key = PyTuple_GetItem(this_match, 0);
-	PyObject *value = PyTuple_GetItem(this_match, 1);
-	if (key == NULL | value == NULL) {
+	PyObject *plugin_name = PyTuple_GetItem(this_match, 0);
+	PyObject *plugin_dict = PyTuple_GetItem(this_match, 1);
+
+	if (plugin_name == NULL | plugin_dict == NULL) {
 		return 0;
 	}
-	keystr = PyString_AsString(key);
-	if (strcmp(keystr, "tcp") == 0) {
+	base += sizeof(struct xt_entry_match);
+	match_entry->u.user.revision = 3;
+
+	keystr = PyString_AsString(plugin_name);
+	if (strcmp(keystr, "tcp") == 0) { 
 		/* tcp match plugin */	
+		struct xt_tcp *tcpinfo = base;
+		PyObject *spts_tuple = PyDict_GetItemString(plugin_dict, "spts"); 
+		tcpinfo->spts[0] = PyInt_AsLong(PyTuple_GetItem(spts_tuple, 0));
+		tcpinfo->spts[1] = PyInt_AsLong(PyTuple_GetItem(spts_tuple, 1));
+		PyObject *dpts_tuple = PyDict_GetItemString(plugin_dict, "dpts");
+		tcpinfo->dpts[0] = PyInt_AsLong(PyTuple_GetItem(dpts_tuple, 0));
+		tcpinfo->dpts[1] = PyInt_AsLong(PyTuple_GetItem(dpts_tuple, 1));
+		tcpinfo->option = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "options"));
+		tcpinfo->flg_mask = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "flag_mask"));
+		tcpinfo->flg_cmp = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "flag_cmp"));
+		tcpinfo->invflags = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "invflags"));
+		strcpy(match_entry->u.user.name, keystr);
+		match_entry->u.match_size = sizeof(struct xt_tcp);
+		base += sizeof(struct xt_tcp);
+	} else if (strcmp(keystr, "pkttype")) {
+		/* packet type plugin */
+		struct xt_pkttype_info *info = base;
+		info->pkttype = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "type"));
+		info->invert = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "invert"));
+
+		strcpy(match_entry->u.user.name, keystr);
+		match_entry->u.match_size = sizeof(struct xt_pkttype_info);
+		base += sizeof(struct xt_pkttype_info);
+	}  else if (strcmp(keystr, "conntrack")) {
+		/* conntrack plugin */
+		struct xt_conntrack_mtinfo3 *info = base;
+		unsigned int match_flags = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "match_flags"));
+		if (match_flags & XT_CONNTRACK_STATE) {
+			info->state_mask = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "state"));
+		}
+		if (match_flags & XT_CONNTRACK_STATUS) {
+			info->status_mask = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "status"));
+		}
+		if (match_flags & XT_CONNTRACK_EXPIRES) {
+			info->expires_min = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "expires_min")); 
+			info->expires_max = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "expires_max"));
+		}
+		if (match_flags & XT_CONNTRACK_ORIGSRC) {
+			info->origsrc_addr.in.s_addr = *(unsigned int *)PyString_AsString(PyDict_GetItemString(plugin_dict, "origsrc_ip"));
+			info->origsrc_mask.in.s_addr = *(unsigned int *)PyString_AsString(PyDict_GetItemString(plugin_dict, "origsrc_mask"));
+		}
+		if (match_flags & XT_CONNTRACK_ORIGDST) {
+			info->origdst_addr.in.s_addr = *(unsigned int *)PyString_AsString(PyDict_GetItemString(plugin_dict, "origdst_ip"));
+			info->origdst_mask.in.s_addr = *(unsigned int *)PyString_AsString(PyDict_GetItemString(plugin_dict, "origdst_mask"));	
+		}
+		if (match_flags & XT_CONNTRACK_REPLSRC) {
+			info->replsrc_addr.in.s_addr = *(unsigned int *)PyString_AsString(PyDict_GetItemString(plugin_dict, "replsrc_ip"));
+			info->replsrc_mask.in.s_addr = *(unsigned int *)PyString_AsString(PyDict_GetItemString(plugin_dict, "replsrc_mask"));
+		}
+		if (match_flags & XT_CONNTRACK_REPLDST) {
+			info->repldst_addr.in.s_addr = *(unsigned int *)PyString_AsString(PyDict_GetItemString(plugin_dict, "repldst_ip"));
+			info->repldst_addr.in.s_addr = *(unsigned int *)PyString_AsString(PyDict_GetItemString(plugin_dict, "repldst_mask")); 
+		}
+		info->invert_flags = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "invflags"));
+		strcpy(match_entry->u.user.name, keystr);
+		match_entry->u.match_size = sizeof(struct xt_conntrack_mtinfo3);
+		base += sizeof(struct xt_conntrack_mtinfo3);
+	} else if (strcmp(keystr, "limit")) {
+		/* limit plugin */
+		struct xt_rateinfo *r = base;
+		r->avg = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "avg"));
+		r->burst = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "burst"));
+		strcpy(match_entry->u.user.name, keystr);
+		match_entry->u.match_size = sizeof(struct xt_rateinfo);
+		base += sizeof(struct xt_rateinfo);
+	} else if (strcmp(keystr, "icmp")) {
+		/* icmp plugin */
+		struct ipt_icmp *icmpinfo = base;
+		icmpinfo->type = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "type"));
+		icmpinfo->code[0] = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "min"));
+		icmpinfo->code[1] = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "max"));
+		icmpinfo->invflags = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "invflags"));
+		strcpy(match_entry->u.user.name, keystr);
+		match_entry->u.match_size = sizeof(struct ipt_icmp);
+		base += sizeof(struct ipt_icmp);
 	}
 	return 1;
 }
@@ -474,11 +553,11 @@ compile_rule(PyObject *rule_dict, struct ipt_entry *this_entry, unsigned int *cu
 	match_entry_base = (void *)this_entry + sizeof(struct ipt_entry);
 	PyObject *matches_dict = PyDict_GetItemString(rule_dict, "matches");
 	PyObject *matches_dict_iter = PyObject_GetIter(PyDict_Items(matches_dict));
-	unsigned int match_offset;
+
 	int ret;
 	PyObject *matches_dict_next = PyIter_Next(matches_dict_iter);
 	while (matches_dict_next) {
-		ret = compile_match(match_entry_base, matches_dict_next, &match_offset);
+		ret = compile_match(match_entry_base, matches_dict_next);
 		Py_XDECREF(matches_dict_next);
 		if (!ret) {
 			Py_XDECREF(matches_dict_iter);	
