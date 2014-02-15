@@ -40,9 +40,9 @@ struct replace_context {
 	struct ipt_replace *replace;
 	struct ipt_getinfo *info;
 	unsigned int current_offset;
-	unsigned int memory_size;
-	void *memory;
 	unsigned int last_chain_end;
+	unsigned int memory_size;
+	void *memory; 
 };
 
 static const char *hooknames[] = {
@@ -83,117 +83,295 @@ entry_is_hook_entry(struct ipt_entry *e, struct ipt_getinfo *info,
 	return 0;
 }
 
+#define DICT_GET_INT(x, y) PyInt_AsLong(PyDict_GetItemString(x, y))
+#define DICT_GET_ULONG(x, y) PyLong_AsUnsignedLong(PyDict_GetItemString(x, y))
+#define DICT_GET_STRING(x, y) PyString_AsString(PyDict_GetItemString(x, y))
+#define DICT_STORE_INT(x, y, z) PyDict_SetItemString(x, y, PyInt_FromLong(z))
+#define DICT_STORE_ULONG(x, y, z) PyDict_SetItemString(x, y, PyLong_FromUnsignedLong(z))
+#define DICT_STORE_STRING(x, y, z) PyDict_SetItemString(x, y, PyString_FromString(z))
 
-static int 
-add_matches(struct xt_entry_match *m, PyObject *matches_dict)
-{ 
-    PyObject *match_dict = NULL; 
-        match_dict = PyDict_New();  
-	PyDict_SetItemString(match_dict, "size",
-			PyInt_FromLong(m->u.user.match_size));
-    if (strcmp(m->u.user.name, "pkttype") == 0) {
-        struct xt_pkttype_info *info  = (struct xt_pkttype_info *)m->data; 
-        PyDict_SetItemString(match_dict, "type",
-                PyInt_FromLong(info->pkttype));
-        PyDict_SetItemString(match_dict, "invert",
-                PyInt_FromLong(info->invert));
-    } else if (strcmp(m->u.user.name, "tcp") == 0) { 
-        struct xt_tcp *tcpinfo = (struct xt_tcp *)m->data;        
-        PyDict_SetItemString(match_dict, "spts",
-                PyTuple_Pack(2, PyInt_FromLong(tcpinfo->spts[0]),
-                    PyInt_FromLong(tcpinfo->spts[1])));
-        PyDict_SetItemString(match_dict, "dpts",
-                PyTuple_Pack(2, PyInt_FromLong(tcpinfo->dpts[0]),
-                    PyInt_FromLong(tcpinfo->dpts[1])));
-        PyDict_SetItemString(match_dict, "options",
-                PyInt_FromLong(tcpinfo->option));
-        PyDict_SetItemString(match_dict, "flag_mask",
-                PyInt_FromLong(tcpinfo->flg_mask)); 
-        PyDict_SetItemString(match_dict, "flag_cmp",
-                PyInt_FromLong(tcpinfo->flg_cmp));
-        PyDict_SetItemString(match_dict, "invflags",
-                PyInt_FromLong(tcpinfo->invflags)); 
-    } else if (strcmp(m->u.user.name, "conntrack") == 0) {
-	    if (m->u.user.revision == 3) {
-		struct xt_conntrack_mtinfo3 *info = (void *)m->data; 
-		
-		if (info->match_flags & XT_CONNTRACK_STATE) { 
-		    PyDict_SetItemString(match_dict, "state",
-			    PyInt_FromLong(info->state_mask));
-		}
-		if (info->match_flags & XT_CONNTRACK_STATUS) {
-		    PyDict_SetItemString(match_dict, "status",
-			    PyInt_FromLong(info->status_mask));
-		}
-		if (info->match_flags & XT_CONNTRACK_EXPIRES) {
-		    PyDict_SetItemString(match_dict, "expires_min", 
-			    PyInt_FromLong(info->expires_min));
-		    PyDict_SetItemString(match_dict, "expires_max",
-			    PyInt_FromLong(info->expires_max));
-		} 
-		if (info->match_flags & XT_CONNTRACK_ORIGSRC) {
-			PyDict_SetItemString(match_dict, "origsrc_ip",
-					PyString_FromStringAndSize(
-						(void *)&((struct in_addr *)&info->origsrc_addr.in)->s_addr, 4));
-			PyDict_SetItemString(match_dict, "origsrc_mask",
-					PyString_FromStringAndSize(
-						(void *)&(((struct in_addr *)&info->origsrc_mask.in)->s_addr), 4)); 
-		} 
-		if (info->match_flags & XT_CONNTRACK_ORIGDST) {
-			PyDict_SetItemString(match_dict, "origdst_ip",
-					PyString_FromStringAndSize(
-						(void *)&((struct in_addr *)&info->origdst_addr.in)->s_addr, 4));
-			PyDict_SetItemString(match_dict, "origdst_mask",
-					PyString_FromStringAndSize(
-						(void *)&(((struct in_addr *)&info->origdst_mask.in)->s_addr), 4));
-		} 
-		if (info->match_flags & XT_CONNTRACK_REPLSRC) {
-			PyDict_SetItemString(match_dict, "replsrc_ip",
-					PyString_FromStringAndSize(
-						(void *)&((struct in_addr *)&info->replsrc_addr.in)->s_addr, 4));
-			PyDict_SetItemString(match_dict, "replsrc_mask",
-					PyString_FromStringAndSize(
-						(void *)&(((struct in_addr *)&info->replsrc_mask.in)->s_addr), 4)); 
-		} 
-
-		if (info->match_flags & XT_CONNTRACK_REPLDST) {
-			PyDict_SetItemString(match_dict, "repldst_ip",
-					PyString_FromStringAndSize(
-						(void *)&((struct in_addr *)&info->repldst_addr.in)->s_addr, 4));
-			PyDict_SetItemString(match_dict, "repldst_mask",
-					PyString_FromStringAndSize(
-						(void *)&(((struct in_addr *)&info->repldst_mask.in)->s_addr), 4)); 
-		} 
-		PyDict_SetItemString(match_dict, "invflags",
-			PyInt_FromLong(info->invert_flags)); 
-	}	
-    } else if (strcmp(m->u.user.name, "limit") == 0) {
-        struct xt_rateinfo *r =(struct xt_rateinfo *)m->data; 
-        PyDict_SetItemString(match_dict, "avg",
-                PyInt_FromLong(r->avg));
-        PyDict_SetItemString(match_dict, "burst",
-                PyInt_FromLong(r->burst));
-    } else if (strcmp(m->u.user.name, "icmp") == 0) {
-        struct ipt_icmp *icmpinfo = (struct ipt_icmp *)m->data; 
-        PyDict_SetItemString(match_dict, "type",
-                PyInt_FromLong(icmpinfo->type));
-        PyDict_SetItemString(match_dict, "min",
-                PyInt_FromLong(icmpinfo->code[0]));
-        PyDict_SetItemString(match_dict, "max",
-                PyInt_FromLong(icmpinfo->code[1]));
-        PyDict_SetItemString(match_dict, "invflags",
-                PyInt_FromLong(icmpinfo->invflags));
-    } 
-
-
-	PyDict_SetItemString(matches_dict, m->u.user.name,
-                    match_dict); 
-
-    return 0;
+static int
+handle_match_pkttype(PyObject *match_dict, void *data, unsigned write)
+{
+	if (write == 0) {
+		struct xt_pkttype_info *info = data;
+		DICT_STORE_INT(match_dict, "type", info->pkttype);
+		DICT_STORE_ULONG(match_dict, "invert", info->invert);
+	} else { 
+		/* packet type plugin */
+		struct xt_pkttype_info *info = data;
+		info->pkttype = DICT_GET_INT(match_dict, "type"); 
+		info->invert = DICT_GET_ULONG(match_dict, "invert"); 
+	}
+	return 0;
 }
 
 static int 
-add_entry(struct ipt_entry *e, PyObject *chains_dict,
+handle_match_tcp(PyObject *match_dict, void *data, unsigned write)
+{
+	if (write == 0) {
+		struct xt_tcp *tcpinfo = data; 
+		PyDict_SetItemString(match_dict, "spts",
+			PyTuple_Pack(2, PyInt_FromLong(tcpinfo->spts[0]),
+			    PyInt_FromLong(tcpinfo->spts[1])));
+		PyDict_SetItemString(match_dict, "dpts",
+			PyTuple_Pack(2, PyInt_FromLong(tcpinfo->dpts[0]),
+			    PyInt_FromLong(tcpinfo->dpts[1])));
+		DICT_STORE_ULONG(match_dict, "options", tcpinfo->option);	
+		DICT_STORE_ULONG(match_dict, "flag_mask", tcpinfo->flg_mask);
+		DICT_STORE_ULONG(match_dict, "flag_cmp", tcpinfo->flg_cmp);
+		DICT_STORE_ULONG(match_dict, "invflags", tcpinfo->invflags);
+	} else { 
+		/* tcp match plugin */	
+		struct xt_tcp *tcpinfo = data;
+#define TUPLE_GET_INT(x, y) PyInt_AsLong(PyTuple_GetItem(x, y))
+		PyObject *spts_tuple = PyDict_GetItemString(match_dict,
+			"spts"); 
+		tcpinfo->spts[0] = TUPLE_GET_INT(spts_tuple, 0); 
+		tcpinfo->spts[1] = TUPLE_GET_INT(spts_tuple, 1); 
+		PyObject *dpts_tuple = PyDict_GetItemString(match_dict,
+			"dpts");
+		tcpinfo->dpts[0] = TUPLE_GET_INT(dpts_tuple, 0);
+		tcpinfo->dpts[1] = TUPLE_GET_INT(dpts_tuple, 1); 
+#undef TUPLE_GET_INT
+		tcpinfo->option = DICT_GET_ULONG(match_dict, "options");
+		tcpinfo->flg_mask = DICT_GET_ULONG(match_dict,
+			"flag_mask");
+		tcpinfo->flg_cmp = DICT_GET_ULONG(match_dict, "flag_cmp");
+		tcpinfo->invflags = DICT_GET_ULONG(match_dict, "invflags");
+	}
+	return 0;
+
+}
+
+static int
+handle_match_conntrack(PyObject *match_dict, void *data, unsigned write)
+{ 
+	if (write == 0) {
+
+		struct xt_conntrack_mtinfo3 *info = data;
+		if (info->match_flags & XT_CONNTRACK_STATE) { 
+			DICT_STORE_ULONG(match_dict, "state",
+					info->state_mask);
+		}
+		if (info->match_flags & XT_CONNTRACK_STATUS) { 
+			DICT_STORE_ULONG(match_dict, "status",
+					info->status_mask);
+		}
+		if (info->match_flags & XT_CONNTRACK_EXPIRES) {
+			DICT_STORE_INT(match_dict, "expires_min",
+					info->expires_min);	
+			DICT_STORE_INT(match_dict, "expires_max",
+					info->expires_max); 
+		} 
+		if (info->match_flags & XT_CONNTRACK_ORIGSRC) {
+			DICT_STORE_ULONG(match_dict, "origscr_ip",
+					info->origsrc_addr.in.s_addr);
+			DICT_STORE_ULONG(match_dict, "origsrc_mask",
+					info->origsrc_mask.in.s_addr); 
+		} 
+		if (info->match_flags & XT_CONNTRACK_ORIGDST) {
+			DICT_STORE_ULONG(match_dict, "origdst_ip",
+					info->origdst_addr.in.s_addr);
+			DICT_STORE_ULONG(match_dict, "origdst_mask",
+					info->origdst_mask.in.s_addr); 
+		} 
+		if (info->match_flags & XT_CONNTRACK_REPLSRC) {
+			DICT_STORE_ULONG(match_dict, "replsrc_ip",
+					info->replsrc_addr.in.s_addr);
+			DICT_STORE_ULONG(match_dict, "replsrc_mask",
+					info->replsrc_mask.in.s_addr); 
+		} 
+
+		if (info->match_flags & XT_CONNTRACK_REPLDST) {
+			DICT_STORE_ULONG(match_dict, "repldst_ip",
+					info->repldst_addr.in.s_addr);
+			DICT_STORE_ULONG(match_dict, "repldst_mask",
+					info->repldst_mask.in.s_addr); 
+		} 
+		DICT_STORE_ULONG(match_dict, "invflags",
+				info->invert_flags); 
+	} else { 
+		struct xt_conntrack_mtinfo3 *info = data;
+		unsigned match_flags = DICT_GET_ULONG(match_dict, "match_flags");
+		if (match_flags & XT_CONNTRACK_STATE) {
+			info->state_mask = DICT_GET_ULONG(match_dict, "state");
+		}
+		if (match_flags & XT_CONNTRACK_STATUS) {
+			info->status_mask = DICT_GET_ULONG(match_dict, "status");
+		} 
+		if (match_flags & XT_CONNTRACK_EXPIRES) {
+			info->expires_min = DICT_GET_INT(match_dict, "expires_min"); 
+			info->expires_max = DICT_GET_INT(match_dict, "expires_max");
+		}
+		if (match_flags & XT_CONNTRACK_ORIGSRC) {
+			info->origsrc_addr.in.s_addr = DICT_GET_ULONG(match_dict, "origsrc_ip");
+			info->origsrc_mask.in.s_addr = DICT_GET_ULONG(match_dict, "origsrc_mask");
+		}
+		if (match_flags & XT_CONNTRACK_ORIGDST) {
+			info->origdst_addr.in.s_addr = DICT_GET_ULONG(match_dict, "origdst_ip");
+			info->origdst_mask.in.s_addr = DICT_GET_ULONG(match_dict, "origdst_mask");	
+		}
+		if (match_flags & XT_CONNTRACK_REPLSRC) {
+			info->replsrc_addr.in.s_addr = DICT_GET_ULONG(match_dict, "replsrc_ip");
+			info->replsrc_mask.in.s_addr = DICT_GET_ULONG(match_dict, "replsrc_mask");
+		}
+		if (match_flags & XT_CONNTRACK_REPLDST) {
+			info->repldst_addr.in.s_addr = DICT_GET_ULONG(match_dict, "repldst_ip");
+			info->repldst_addr.in.s_addr = DICT_GET_ULONG(match_dict, "repldst_mask"); 
+		}
+		info->invert_flags = DICT_GET_ULONG(match_dict, "invflags");
+	
+	}
+	return 0;
+}
+
+static int
+handle_match_limit(PyObject *match_dict, void *data, unsigned write)
+{ 
+	if (write == 0) {
+		struct xt_rateinfo *r = data;
+		DICT_STORE_ULONG(match_dict, "avg", r->avg);
+		DICT_STORE_ULONG(match_dict, "burst", r->burst); 
+	} else {
+		struct xt_rateinfo *r = data;
+		r->avg = DICT_GET_INT(match_dict, "avg"); 
+		r->burst = DICT_GET_INT(match_dict, "burst");
+	}
+	return 0;
+} 
+
+static int 
+handle_match_icmp(PyObject *match_dict, void *data, unsigned write)
+{
+	if (write == 0) {
+		struct ipt_icmp *icmpinfo = data;
+		DICT_STORE_INT(match_dict, "type", icmpinfo->type);	
+		DICT_STORE_INT(match_dict, "min", icmpinfo->code[0]);
+		DICT_STORE_INT(match_dict, "max", icmpinfo->code[1]);
+		DICT_STORE_ULONG(match_dict, "invflags", icmpinfo->invflags); 
+	} else {
+		struct ipt_icmp *icmpinfo = data;
+		icmpinfo->type = DICT_GET_INT(match_dict, "type"); 
+		icmpinfo->code[0] = DICT_GET_INT(match_dict, "min"); 
+		icmpinfo->code[1] = DICT_GET_INT(match_dict, "max"); 
+		icmpinfo->invflags = DICT_GET_ULONG(match_dict, "invflags"); 
+	}
+	return 0;
+}
+
+static int
+handle_target_log(PyObject *target_dict, void *target_data, unsigned write)
+{
+	if (write == 0) {			
+		struct ipt_log_info *loginfo = target_data;
+		DICT_STORE_ULONG(target_dict, "level", loginfo->level);
+		DICT_STORE_ULONG(target_dict, "logflags",
+				loginfo->logflags);
+		DICT_STORE_STRING(target_dict, "prefix", loginfo->prefix); 
+	}
+	return 0;
+
+}
+
+static int
+handle_target_reject(PyObject *target_dict, void *target_data, unsigned write)
+{
+	if (write == 0) {
+		struct ipt_reject_info *rjinfo = target_data;
+		DICT_STORE_ULONG(target_dict, "with", rjinfo->with); 
+	}
+	return 0;
+}
+
+
+static int 
+parse_match(struct xt_entry_match *m, PyObject *matches_dict)
+{ 
+	PyObject *match_dict = NULL; 
+	match_dict = PyDict_New();  
+
+	DICT_STORE_INT(match_dict, "size", m->u.user.match_size); 
+	if (strcmp(m->u.user.name, "pkttype") == 0) { 
+		handle_match_pkttype(match_dict, m->data, 0);
+	} else if (strcmp(m->u.user.name, "tcp") == 0) { 
+		handle_match_tcp(match_dict, m->data, 0); 
+	} else if (strcmp(m->u.user.name, "conntrack") == 0) { 
+		if (m->u.user.revision != 3) {
+		    goto RETURN;
+		}
+		handle_match_conntrack(match_dict, m->data, 0);
+	} else if (strcmp(m->u.user.name, "limit") == 0) {
+		handle_match_limit(match_dict, m->data, 0);
+	} else if (strcmp(m->u.user.name, "icmp") == 0) {
+		handle_match_icmp(match_dict, m->data, 0);
+	} 
+	PyDict_SetItemString(matches_dict, m->u.user.name,
+                    match_dict); 
+
+	return 0; 
+RETURN:
+	return 0;
+}
+
+static int parse_matches(PyObject *rule_dict, struct ipt_entry *e)
+{ 
+	PyObject *matches_dict = NULL;
+	/* matches */
+	matches_dict = PyDict_New(); 
+	XT_MATCH_ITERATE(struct ipt_entry, e, parse_match, matches_dict); 
+	PyDict_SetItemString(rule_dict, "matches", matches_dict); 
+	return 0;
+}
+
+static int
+parse_targets(PyObject *rule_dict, struct xt_entry_target *t, struct ipt_entry *e, struct ipt_get_entries *entries)
+{ 
+	/* target */
+	struct xt_standard_target *xt = (void *)t; 
+	if (strcmp(t->u.user.name, XT_STANDARD_TARGET) == 0) { 
+		if (xt->verdict < 0) {
+			DICT_STORE_STRING(rule_dict, "target_type",
+					"standard"); 
+			DICT_STORE_STRING(rule_dict, "verb",
+				xt->verdict == -NF_ACCEPT-1 ? "ACCEPT"
+				: xt->verdict == -NF_DROP-1 ? "DROP"
+				: xt->verdict == -NF_QUEUE-1 ?"QUEUE"
+				: xt->verdict == XT_RETURN ? "RETURN"
+				: "UNKNOWN");
+		} else if (xt->verdict == entry_get_offset(entries, e) + e->next_offset) {
+			DICT_STORE_STRING(rule_dict, "target_type",
+					"fallthrough");
+			DICT_STORE_INT(rule_dict, "verb", xt->verdict); 
+		} else {
+			DICT_STORE_STRING(rule_dict, "target_type",
+					"jump"); 
+			DICT_STORE_INT(rule_dict, "verb", xt->verdict); 
+		}
+	}  else {
+		/* target extension */
+		PyObject *target_dict;
+		target_dict = PyDict_New();
+		if (strcmp(t->u.user.name, "LOG") == 0) { 
+			handle_target_log(target_dict, t->data, 0); 
+			PyDict_SetItemString(rule_dict, "target_dict",
+					target_dict);
+		} 
+		if (strcmp(t->u.user.name, "REJECT") == 0) {
+			handle_target_reject(target_dict, t->data, 0);
+			PyDict_SetItemString(rule_dict, "target_dict",
+					target_dict);
+		}
+		PyDict_SetItemString(rule_dict, "target_type",
+				PyString_FromString("module"));
+		PyDict_SetItemString(rule_dict, "verb",
+				PyInt_FromLong(xt->verdict)); 
+	} 
+	return 0;
+}
+
+static int 
+parse_entry(struct ipt_entry *e, PyObject *chains_dict,
 		PyObject **current_chain_ptr,
 		struct ipt_getinfo *info,
 		struct ipt_get_entries *entries)
@@ -203,8 +381,7 @@ add_entry(struct ipt_entry *e, PyObject *chains_dict,
 	struct xt_entry_target *t; 
 	char iniface_buffer[IFNAMSIZ+1];
 	char outiface_buffer[IFNAMSIZ+1];
-	PyObject *rule_dict;
-	PyObject *matches_dict; 
+	PyObject *rule_dict; 
 
 	memset(iniface_buffer, 0, IFNAMSIZ+1);
 	memset(outiface_buffer, 0, IFNAMSIZ+1);
@@ -216,50 +393,33 @@ add_entry(struct ipt_entry *e, PyObject *chains_dict,
 	/* rule data */
 	rule_dict = PyDict_New();
 	/* for jump target */
-	PyDict_SetItemString(rule_dict, "offset", 
-			PyInt_FromLong(entry_get_offset(entries, e)));
-	PyDict_SetItemString(rule_dict, "srcip",
-			PyInt_FromLong(e->ip.src.s_addr));
-	PyDict_SetItemString(rule_dict, "srcip_mask",
-			PyInt_FromLong(e->ip.smsk.s_addr));
-	PyDict_SetItemString(rule_dict, "dstip",
-			PyInt_FromLong(e->ip.dst.s_addr));
-	PyDict_SetItemString(rule_dict, "dstip_mask",
-			PyInt_FromLong(e->ip.dmsk.s_addr));
+	DICT_STORE_ULONG(rule_dict, "offset", entry_get_offset(entries, e));
+	DICT_STORE_ULONG(rule_dict, "srcip", e->ip.src.s_addr);
+	DICT_STORE_ULONG(rule_dict, "srcip_mask", e->ip.smsk.s_addr);
+	DICT_STORE_ULONG(rule_dict, "dstip", e->ip.dst.s_addr);
+	DICT_STORE_ULONG(rule_dict, "dstip_mask", e->ip.dmsk.s_addr);
+
 	for (i = 0; i < IFNAMSIZ; i++) {
 		*(iniface_buffer+i) = e->ip.iniface_mask[i];
 		*(outiface_buffer) = e->ip.outiface_mask[i];
 	} 
-	PyDict_SetItemString(rule_dict, "iniface",
-			PyString_FromString(e->ip.iniface));
+	DICT_STORE_STRING(rule_dict, "iniface", e->ip.iniface);
+
 	PyDict_SetItemString(rule_dict, "iniface_mask",
 			PyByteArray_FromStringAndSize(iniface_buffer, IFNAMSIZ));
-	PyDict_SetItemString(rule_dict, "outiface",
-			PyString_FromString(e->ip.outiface));
+	DICT_STORE_STRING(rule_dict, "outiface", e->ip.outiface); 
 	PyDict_SetItemString(rule_dict, "outiface_mask",
 			PyByteArray_FromStringAndSize(outiface_buffer, IFNAMSIZ));
-	PyDict_SetItemString(rule_dict, "protocol",
-			PyInt_FromLong(e->ip.proto));
-	PyDict_SetItemString(rule_dict, "flags",
-			PyInt_FromLong(e->ip.flags));
-	PyDict_SetItemString(rule_dict, "invflags",
-			PyInt_FromLong(e->ip.invflags));
-	PyDict_SetItemString(rule_dict, "packets",
-			PyInt_FromLong(
-				(unsigned long long)e->counters.pcnt));
-	PyDict_SetItemString(rule_dict, "bytes",
-			PyInt_FromLong(
-				(unsigned long long)e->counters.bcnt));
-	PyDict_SetItemString(rule_dict, "cache",
-			PyInt_FromLong(e->nfcache));
-	/* matches */
-	matches_dict = PyDict_New(); 
-	XT_MATCH_ITERATE(struct ipt_entry, e, add_matches, matches_dict); 
-	PyDict_SetItemString(rule_dict, "matches", matches_dict); 
+	DICT_STORE_INT(rule_dict, "protocol", e->ip.proto);
+	DICT_STORE_ULONG(rule_dict, "flags", e->ip.flags);
+	DICT_STORE_ULONG(rule_dict, "invflags", e->ip.invflags);
+	DICT_STORE_ULONG(rule_dict, "packets", e->counters.pcnt);
+	DICT_STORE_ULONG(rule_dict, "bytes", e->counters.bcnt);
+	DICT_STORE_ULONG(rule_dict, "cache", e->nfcache); 
+
 	/* target */
 	t = (void *)e + e->target_offset;
-	PyDict_SetItemString(rule_dict, "target",
-			PyString_FromString(t->u.user.name));
+	DICT_STORE_STRING(rule_dict, "target", t->u.user.name); 
 	/* new chain */ 
 	if (strcmp(t->u.user.name, XT_ERROR_TARGET) == 0) {
 		/* new user defined chain */
@@ -274,58 +434,7 @@ add_entry(struct ipt_entry *e, PyObject *chains_dict,
 				(char *)hooknames[builtin-1],
 				*current_chain_ptr); 
 	} 
-	/* target */
-	struct xt_standard_target *xt = (void *)t; 
-	if (strcmp(t->u.user.name, XT_STANDARD_TARGET) == 0) { 
-		if (xt->verdict < 0) {
-			PyDict_SetItemString(rule_dict, "target_type",
-					PyString_FromString("standard"));
-			PyDict_SetItemString(rule_dict, "verb",
-				PyString_FromString(
-					xt->verdict == -NF_ACCEPT-1 ? "ACCEPT"
-					: xt->verdict == -NF_DROP-1 ? "DROP"
-					: xt->verdict == -NF_QUEUE-1 ?"QUEUE"
-					: xt->verdict == XT_RETURN ? "RETURN"
-					: "UNKNOWN"));
-		}
-		else if (xt->verdict == entry_get_offset(entries, e) + e->next_offset) {
-			PyDict_SetItemString(rule_dict, "target_type",
-					PyString_FromString("fallthrough"));
-			PyDict_SetItemString(rule_dict, "verb",
-					PyInt_FromLong(xt->verdict));
-		} else {
-			PyDict_SetItemString(rule_dict, "target_type",
-					PyString_FromString("jump"));
-			PyDict_SetItemString(rule_dict, "verb",
-					PyInt_FromLong(xt->verdict));
-		}
-	}  else {
-		/* target extension */
-		PyObject *target_dict;
-		target_dict = PyDict_New();
-		if (strcmp(t->u.user.name, "LOG") == 0) { 
-			struct ipt_log_info *loginfo = (void *)t->data;
-			PyDict_SetItemString(target_dict, "level",	
-					PyInt_FromLong((long)loginfo->level));
-			PyDict_SetItemString(target_dict, "logflags",
-					PyInt_FromLong((long)loginfo->logflags));
-			PyDict_SetItemString(target_dict, "prefix",
-					PyString_FromString(loginfo->prefix));
-			PyDict_SetItemString(rule_dict, "target_dict",
-					target_dict);
-		} 
-		if (strcmp(t->u.user.name, "REJECT") == 0) {
-			struct ipt_reject_info *rjinfo = (void *)t->data;
-			PyDict_SetItemString(target_dict, "with",
-					PyInt_FromLong(rjinfo->with));
-			PyDict_SetItemString(rule_dict, "target_dict",
-					target_dict);
-		}
-		PyDict_SetItemString(rule_dict, "target_type",
-				PyString_FromString("module"));
-		PyDict_SetItemString(rule_dict, "verb",
-				PyInt_FromLong(xt->verdict)); 
-	}
+	parse_targets(rule_dict, t, e, entries);
 	/* add rule to current_chain */
 	if (*current_chain_ptr) 
 		return PyList_Append(*current_chain_ptr, rule_dict) ? 1 : 0; 
@@ -342,22 +451,18 @@ parse_entries(struct ipt_getinfo *info, struct ipt_get_entries *entries)
 	PyObject *current_chain = NULL;
 
 	table_dict = PyDict_New();
-	PyDict_SetItemString(table_dict, "iptver",
-			PyString_FromString(XTABLES_VERSION));		
-	PyDict_SetItemString(table_dict, "blobsize",
-			PyInt_FromLong(entries->size));
-	PyDict_SetItemString(table_dict, "name",
-			PyString_FromString(info->name)); 
+	DICT_STORE_STRING(table_dict, "iptver", XTABLES_VERSION); 
+	DICT_STORE_INT(table_dict, "blobsize", entries->size); 
+	DICT_STORE_STRING(table_dict, "name", info->name); 
 
-	chains_dict = PyDict_New();
-	
+	chains_dict = PyDict_New(); 
 	unsigned int i, ret; 
 	struct ipt_entry *entry;
 
 	for (i = 0;i < entries->size;
 			i += entry->next_offset) {
 		entry = (void *)(entries->entrytable) + i; 
-		ret = add_entry(entry, chains_dict,
+		ret = parse_entry(entry, chains_dict,
 				&current_chain, info, entries); 
 		if (ret != 0)
 			break;
@@ -431,98 +536,49 @@ ERROR:
 
 
 static int 
-compile_match(void *base, PyObject *this_match) 
+compile_match(void **base, PyObject *this_match) 
 {
 	/*supress gcc warning*/
-	struct xt_entry_match *match_entry = base;
+	struct xt_entry_match *match_entry = *base;
 	const char *keystr = NULL;
 	PyObject *plugin_name = PyTuple_GetItem(this_match, 0);
-	PyObject *plugin_dict = PyTuple_GetItem(this_match, 1);
+	PyObject *match_dict = PyTuple_GetItem(this_match, 1);
 
-	if (plugin_name == NULL | plugin_dict == NULL) {
+	if ((plugin_name == NULL) | (match_dict == NULL)) {
 		return 0;
 	}
-	base += sizeof(struct xt_entry_match);
+	*base += sizeof(struct xt_entry_match);
 	match_entry->u.user.revision = 3;
 
 	keystr = PyString_AsString(plugin_name);
 	if (strcmp(keystr, "tcp") == 0) { 
-		/* tcp match plugin */	
-		struct xt_tcp *tcpinfo = base;
-		PyObject *spts_tuple = PyDict_GetItemString(plugin_dict, "spts"); 
-		tcpinfo->spts[0] = PyInt_AsLong(PyTuple_GetItem(spts_tuple, 0));
-		tcpinfo->spts[1] = PyInt_AsLong(PyTuple_GetItem(spts_tuple, 1));
-		PyObject *dpts_tuple = PyDict_GetItemString(plugin_dict, "dpts");
-		tcpinfo->dpts[0] = PyInt_AsLong(PyTuple_GetItem(dpts_tuple, 0));
-		tcpinfo->dpts[1] = PyInt_AsLong(PyTuple_GetItem(dpts_tuple, 1));
-		tcpinfo->option = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "options"));
-		tcpinfo->flg_mask = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "flag_mask"));
-		tcpinfo->flg_cmp = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "flag_cmp"));
-		tcpinfo->invflags = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "invflags"));
+		handle_match_tcp(match_dict, *base,  1);
 		strcpy(match_entry->u.user.name, keystr);
 		match_entry->u.match_size = sizeof(struct xt_tcp);
-		base += sizeof(struct xt_tcp);
+		*base += sizeof(struct xt_tcp);
 	} else if (strcmp(keystr, "pkttype")) {
-		/* packet type plugin */
-		struct xt_pkttype_info *info = base;
-		info->pkttype = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "type"));
-		info->invert = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "invert"));
-
+		handle_match_pkttype(match_dict, *base, 1);
 		strcpy(match_entry->u.user.name, keystr);
 		match_entry->u.match_size = sizeof(struct xt_pkttype_info);
-		base += sizeof(struct xt_pkttype_info);
+		*base += sizeof(struct xt_pkttype_info);
 	}  else if (strcmp(keystr, "conntrack")) {
 		/* conntrack plugin */
-		struct xt_conntrack_mtinfo3 *info = base;
-		unsigned int match_flags = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "match_flags"));
-		if (match_flags & XT_CONNTRACK_STATE) {
-			info->state_mask = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "state"));
-		}
-		if (match_flags & XT_CONNTRACK_STATUS) {
-			info->status_mask = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "status"));
-		}
-		if (match_flags & XT_CONNTRACK_EXPIRES) {
-			info->expires_min = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "expires_min")); 
-			info->expires_max = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "expires_max"));
-		}
-		if (match_flags & XT_CONNTRACK_ORIGSRC) {
-			info->origsrc_addr.in.s_addr = *(unsigned int *)PyString_AsString(PyDict_GetItemString(plugin_dict, "origsrc_ip"));
-			info->origsrc_mask.in.s_addr = *(unsigned int *)PyString_AsString(PyDict_GetItemString(plugin_dict, "origsrc_mask"));
-		}
-		if (match_flags & XT_CONNTRACK_ORIGDST) {
-			info->origdst_addr.in.s_addr = *(unsigned int *)PyString_AsString(PyDict_GetItemString(plugin_dict, "origdst_ip"));
-			info->origdst_mask.in.s_addr = *(unsigned int *)PyString_AsString(PyDict_GetItemString(plugin_dict, "origdst_mask"));	
-		}
-		if (match_flags & XT_CONNTRACK_REPLSRC) {
-			info->replsrc_addr.in.s_addr = *(unsigned int *)PyString_AsString(PyDict_GetItemString(plugin_dict, "replsrc_ip"));
-			info->replsrc_mask.in.s_addr = *(unsigned int *)PyString_AsString(PyDict_GetItemString(plugin_dict, "replsrc_mask"));
-		}
-		if (match_flags & XT_CONNTRACK_REPLDST) {
-			info->repldst_addr.in.s_addr = *(unsigned int *)PyString_AsString(PyDict_GetItemString(plugin_dict, "repldst_ip"));
-			info->repldst_addr.in.s_addr = *(unsigned int *)PyString_AsString(PyDict_GetItemString(plugin_dict, "repldst_mask")); 
-		}
-		info->invert_flags = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "invflags"));
+		handle_match_conntrack(match_dict, *base, 1);
 		strcpy(match_entry->u.user.name, keystr);
 		match_entry->u.match_size = sizeof(struct xt_conntrack_mtinfo3);
-		base += sizeof(struct xt_conntrack_mtinfo3);
+		*base += sizeof(struct xt_conntrack_mtinfo3);
 	} else if (strcmp(keystr, "limit")) {
 		/* limit plugin */
-		struct xt_rateinfo *r = base;
-		r->avg = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "avg"));
-		r->burst = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "burst"));
+		handle_match_limit(match_dict, *base, 1);	
 		strcpy(match_entry->u.user.name, keystr);
 		match_entry->u.match_size = sizeof(struct xt_rateinfo);
-		base += sizeof(struct xt_rateinfo);
+		*base += sizeof(struct xt_rateinfo);
 	} else if (strcmp(keystr, "icmp")) {
 		/* icmp plugin */
-		struct ipt_icmp *icmpinfo = base;
-		icmpinfo->type = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "type"));
-		icmpinfo->code[0] = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "min"));
-		icmpinfo->code[1] = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "max"));
-		icmpinfo->invflags = PyInt_AsLong(PyDict_GetItemString(plugin_dict, "invflags"));
+		handle_match_icmp(match_dict, *base, 1);
 		strcpy(match_entry->u.user.name, keystr);
 		match_entry->u.match_size = sizeof(struct ipt_icmp);
-		base += sizeof(struct ipt_icmp);
+		*base += sizeof(struct ipt_icmp);
 	}
 	return 1;
 }
@@ -532,32 +588,31 @@ compile_rule(PyObject *rule_dict, struct ipt_entry *this_entry, unsigned int *cu
 { 
 	struct xt_entry_match *match_entry_base = NULL;
 	/*convert entry, match, target plugins */
-	this_entry->ip.src.s_addr = PyInt_AsLong(PyDict_GetItemString(rule_dict, "srcip"));
-	this_entry->ip.dst.s_addr = PyInt_AsLong(PyDict_GetItemString(rule_dict, "dstip"));
-	this_entry->ip.smsk.s_addr = PyInt_AsLong(PyDict_GetItemString(rule_dict, "srcip_mask"));
-	this_entry->ip.dmsk.s_addr = PyInt_AsLong(PyDict_GetItemString(rule_dict, "dstip_mask"));
+	this_entry->ip.src.s_addr = DICT_GET_ULONG(rule_dict, "srcip");
+	this_entry->ip.dst.s_addr = DICT_GET_ULONG(rule_dict, "dstip");
+	this_entry->ip.smsk.s_addr = DICT_GET_ULONG(rule_dict, "srcip_mask");
+	this_entry->ip.dmsk.s_addr = DICT_GET_ULONG(rule_dict, "dstip_mask");
 	/*bug char * , unsgined char */
-	strcpy(this_entry->ip.iniface, PyString_AsString(PyDict_GetItemString(rule_dict, "iniface")));
-	strcpy(this_entry->ip.outiface,  PyString_AsString(PyDict_GetItemString(rule_dict, "outiface")));
+	strcpy(this_entry->ip.iniface, DICT_GET_STRING(rule_dict, "iniface"));
+	strcpy(this_entry->ip.outiface,  DICT_GET_STRING(rule_dict, "outiface"));
 	PyObject *iniface_mask = PyDict_GetItemString(rule_dict, "iniface_mask");
 	memcpy(this_entry->ip.iniface_mask, PyByteArray_AsString(iniface_mask), PyByteArray_Size(iniface_mask));
 	PyObject *outiface_mask = PyDict_GetItemString(rule_dict, "outiface_mask");
 	memcpy(this_entry->ip.outiface_mask,  PyByteArray_AsString(outiface_mask), PyByteArray_Size(outiface_mask)); 
-	this_entry->ip.proto = PyInt_AsLong(PyDict_GetItemString(rule_dict, "protocol"));	
-	this_entry->ip.flags = PyInt_AsLong(PyDict_GetItemString(rule_dict, "flags"));
-	this_entry->ip.invflags = PyInt_AsLong(PyDict_GetItemString(rule_dict, "invflags"));
-	this_entry->counters.pcnt = PyInt_AsLong(PyDict_GetItemString(rule_dict, "packets"));
-	this_entry->counters.bcnt = PyInt_AsLong(PyDict_GetItemString(rule_dict, "bytes"));
-	this_entry->nfcache = PyInt_AsLong(PyDict_GetItemString(rule_dict, "bytes"));	
+	this_entry->ip.proto = DICT_GET_INT(rule_dict, "protocol");	
+	this_entry->ip.flags = DICT_GET_ULONG(rule_dict, "flags");
+	this_entry->ip.invflags = DICT_GET_ULONG(rule_dict, "invflags");
+	this_entry->counters.pcnt = DICT_GET_ULONG(rule_dict, "packets");
+	this_entry->counters.bcnt = DICT_GET_ULONG(rule_dict, "bytes");
+	this_entry->nfcache = DICT_GET_ULONG(rule_dict, "bytes");	
 	/*iter over matches */
 	match_entry_base = (void *)this_entry + sizeof(struct ipt_entry);
 	PyObject *matches_dict = PyDict_GetItemString(rule_dict, "matches");
-	PyObject *matches_dict_iter = PyObject_GetIter(PyDict_Items(matches_dict));
-
+	PyObject *matches_dict_iter = PyObject_GetIter(PyDict_Items(matches_dict)); 
 	int ret;
 	PyObject *matches_dict_next = PyIter_Next(matches_dict_iter);
 	while (matches_dict_next) {
-		ret = compile_match(match_entry_base, matches_dict_next);
+		ret = compile_match((void **)match_entry_base, matches_dict_next);
 		Py_XDECREF(matches_dict_next);
 		if (!ret) {
 			Py_XDECREF(matches_dict_iter);	
@@ -708,26 +763,18 @@ iptables_replace_table(PyObject *object, PyObject *args)
 			+ sizeof(struct xt_entry_target)\
 			+ sizeof(struct xt_entry_match));
 	context.memory = PyMem_Malloc(context.memory_size);
-	if (!context.memory) {
-		PyMem_Free(info);
-		PyMem_Free(replace);
-		goto CLEAR;
+	if (!context.memory) { 
+		goto FREE_CONTEXT;
 	}
 	PyObject *chains_keys_iter = PyObject_GetIter(chains_keys);
-	if (!chains_keys_iter) {
-		PyMem_Free(info);
-		PyMem_Free(replace);
-		PyMem_Free(context.memory);
+	if (!chains_keys_iter) { 
 		Py_XDECREF(chains_keys);
-		goto CLEAR;
+		goto FREE_MEMORY;
 	}
 	PyObject *chains_keys_next = PyIter_Next(chains_keys_iter);
-	if (!chains_keys_next) {
-		PyMem_Free(info);
-		PyMem_Free(replace);
-		PyMem_Free(context.memory);
+	if (!chains_keys_next) { 
 		Py_XDECREF(chains_keys); 
-		goto CLEAR;
+		goto FREE_MEMORY;
 	}
 	while (chains_keys_next) {
 		/* handle chains*/
@@ -736,16 +783,18 @@ iptables_replace_table(PyObject *object, PyObject *args)
 		Py_XDECREF(chains_keys_next); 
 		/* if prepare chain failed */
 		if (!chain_ret) { 
-			PyMem_Free(info);
-			PyMem_Free(replace);
-			PyMem_Free(context.memory); 
 			Py_XDECREF(chains_keys_iter); 
 			Py_XDECREF(chains_keys);
-			goto CLEAR;
+			goto FREE_MEMORY;
 		}
 		chains_keys_next = PyIter_Next(chains_keys_iter);
 	} 
 	Py_XDECREF(chains_keys);
+FREE_MEMORY:
+	PyMem_Free(context.memory); 
+FREE_CONTEXT: 
+	PyMem_Free(info);
+	PyMem_Free(replace);
 CLEAR:
 	if (!PyErr_Occurred()) {
 		PyErr_SetString(PyExc_OSError, "iptables runtime error");
@@ -827,135 +876,142 @@ PyMODINIT_FUNC init_iptables(void)
 	PyObject *m;
 	m = Py_InitModule("_iptables", iptables_methods);
 	if (m != NULL) {
-	PyModule_AddObject(m, "IPT_F_FRAG", PyInt_FromLong(IPT_F_FRAG));
-	PyModule_AddObject(m, "IPT_F_GOTO", PyInt_FromLong(IPT_F_GOTO));
-	PyModule_AddObject(m, "IPT_F_MASK", PyInt_FromLong(IPT_F_MASK));
-	PyModule_AddObject(m, "IPT_INV_SRCIP", PyInt_FromLong(IPT_INV_SRCIP));
-	PyModule_AddObject(m, "IPT_INV_DSTIP", PyInt_FromLong(IPT_INV_DSTIP));
-	PyModule_AddObject(m, "IPT_INV_VIA_IN", PyInt_FromLong(IPT_INV_VIA_IN));
-	PyModule_AddObject(m, "IPT_INV_VIA_OUT", PyInt_FromLong(IPT_INV_VIA_OUT));
-	PyModule_AddObject(m, "XT_INV_PROTO", PyInt_FromLong(XT_INV_PROTO));
-	PyModule_AddObject(m, "IPT_INV_FRAG", PyInt_FromLong(IPT_INV_FRAG));
+#define OBJECT_ADD_INT(x, y, z) PyModule_AddObject(x, y, PyInt_FromLong(z))
+	OBJECT_ADD_INT(m, "IPT_F_FRAG", IPT_F_FRAG); 
+	OBJECT_ADD_INT(m, "IPT_F_GOTO", IPT_F_GOTO);
+	OBJECT_ADD_INT(m, "IPT_F_MASK", IPT_F_MASK);	
+	OBJECT_ADD_INT(m, "IPT_INV_SRCIP", IPT_INV_SRCIP);	
+	OBJECT_ADD_INT(m, "IPT_INV_DSTIP", IPT_INV_DSTIP); 
+	OBJECT_ADD_INT(m, "IPT_INV_VIA_IN", IPT_INV_VIA_IN); 
+	OBJECT_ADD_INT(m, "IPT_INV_VIA_OUT", IPT_INV_VIA_OUT);
+	OBJECT_ADD_INT(m, "XT_INV_PROTO", XT_INV_PROTO);	
+	OBJECT_ADD_INT(m, "IPT_INV_FRAG", IPT_INV_FRAG);	
 	/* protocol */
-	PyModule_AddObject(m, "IPPROTO_IP", PyInt_FromLong(IPPROTO_IP));
-	PyModule_AddObject(m, "IPPROTO_ICMP", PyInt_FromLong(IPPROTO_ICMP));
-	PyModule_AddObject(m, "IPPROTO_IGMP", PyInt_FromLong(IPPROTO_IGMP));
-	PyModule_AddObject(m, "IPPROTO_IPIP", PyInt_FromLong(IPPROTO_IPIP));
-	PyModule_AddObject(m, "IPPROTO_TCP", PyInt_FromLong(IPPROTO_TCP));
-	PyModule_AddObject(m, "IPPROTO_EGP", PyInt_FromLong(IPPROTO_EGP));
-	PyModule_AddObject(m, "IPPROTO_PUP", PyInt_FromLong(IPPROTO_PUP));
-	PyModule_AddObject(m, "IPPROTO_UDP", PyInt_FromLong(IPPROTO_UDP));
-	PyModule_AddObject(m, "IPPROTO_IDP", PyInt_FromLong(IPPROTO_IDP));
-	PyModule_AddObject(m, "IPPROTO_DCCP", PyInt_FromLong(IPPROTO_DCCP));
-	PyModule_AddObject(m, "IPPROTO_RSVP", PyInt_FromLong(IPPROTO_RSVP));
-	PyModule_AddObject(m, "IPPROTO_GRE", PyInt_FromLong(IPPROTO_GRE));
-	PyModule_AddObject(m, "IPPROTO_IPV6", PyInt_FromLong(IPPROTO_IPV6));
-	PyModule_AddObject(m, "IPPROTO_ESP", PyInt_FromLong(IPPROTO_ESP));
-	PyModule_AddObject(m, "IPPROTO_AH", PyInt_FromLong(IPPROTO_AH)); 
-	PyModule_AddObject(m, "IPPROTO_PIM", PyInt_FromLong(IPPROTO_PIM));
-	PyModule_AddObject(m, "IPPROTO_COMP", PyInt_FromLong(IPPROTO_COMP));
-	PyModule_AddObject(m, "IPPROTO_SCTP", PyInt_FromLong(IPPROTO_SCTP));
-	PyModule_AddObject(m, "IPPROTO_UDPLITE", PyInt_FromLong(IPPROTO_UDPLITE));
-	PyModule_AddObject(m, "IPPROTO_RAW", PyInt_FromLong(IPPROTO_RAW));
+	OBJECT_ADD_INT(m, "IPPROTO_IP", IPPROTO_IP);
+	OBJECT_ADD_INT(m, "IPPROTO_IP", IPPROTO_IP);
+	OBJECT_ADD_INT(m, "IPPROTO_ICMP", IPPROTO_ICMP);
+	OBJECT_ADD_INT(m, "IPPROTO_IGMP", IPPROTO_IGMP);
+	OBJECT_ADD_INT(m, "IPPROTO_IPIP", IPPROTO_IPIP);
+	OBJECT_ADD_INT(m, "IPPROTO_TCP", IPPROTO_TCP);
+	OBJECT_ADD_INT(m, "IPPROTO_EGP", IPPROTO_EGP);
+	OBJECT_ADD_INT(m, "IPPROTO_PUP", IPPROTO_PUP);
+	OBJECT_ADD_INT(m, "IPPROTO_UDP", IPPROTO_UDP);
+	OBJECT_ADD_INT(m, "IPPROTO_IDP", IPPROTO_IDP);
+	OBJECT_ADD_INT(m, "IPPROTO_DCCP", IPPROTO_DCCP);
+	OBJECT_ADD_INT(m, "IPPROTO_RSVP", IPPROTO_RSVP);
+	OBJECT_ADD_INT(m, "IPPROTO_GRE", IPPROTO_GRE);
+	OBJECT_ADD_INT(m, "IPPROTO_IPV6", IPPROTO_IPV6);
+	OBJECT_ADD_INT(m, "IPPROTO_ESP", IPPROTO_ESP);
+	OBJECT_ADD_INT(m, "IPPROTO_AH", IPPROTO_AH); 
+	OBJECT_ADD_INT(m, "IPPROTO_PIM", IPPROTO_PIM);
+	OBJECT_ADD_INT(m, "IPPROTO_COMP", IPPROTO_COMP);
+	OBJECT_ADD_INT(m, "IPPROTO_SCTP", IPPROTO_SCTP);
+	OBJECT_ADD_INT(m, "IPPROTO_UDPLITE", IPPROTO_UDPLITE);
+	OBJECT_ADD_INT(m, "IPPROTO_RAW", IPPROTO_RAW);
 	/* tcp match extension flag */
-	PyModule_AddObject(m, "TCP_FLAG_FIN", PyInt_FromLong(0x01));
-	PyModule_AddObject(m, "TCP_FLAG_SYN", PyInt_FromLong(0x02));
-	PyModule_AddObject(m, "TCP_FLAG_RST", PyInt_FromLong(0x04));
-	PyModule_AddObject(m, "TCP_FLAG_PSH", PyInt_FromLong(0x08));
-	PyModule_AddObject(m, "TCP_FLAG_ACK", PyInt_FromLong(0x10));
-	PyModule_AddObject(m, "TCP_FLAG_URG", PyInt_FromLong(0x20));
-	PyModule_AddObject(m, "TCP_FLAG_ALL", PyInt_FromLong(0x3F));
-	PyModule_AddObject(m, "TCP_FLAG_NONE", PyInt_FromLong(0x0));
-	PyModule_AddObject(m, "XT_TCP_INV_SRCPT", PyInt_FromLong(XT_TCP_INV_SRCPT));
-	PyModule_AddObject(m, "XT_TCP_INV_DSTPT", PyInt_FromLong(XT_TCP_INV_DSTPT));
-	PyModule_AddObject(m, "XT_TCP_INV_FLAGS", PyInt_FromLong(XT_TCP_INV_FLAGS));
-	PyModule_AddObject(m, "XT_TCP_INV_OPTION", PyInt_FromLong(XT_TCP_INV_OPTION));
-	PyModule_AddObject(m, "XT_TCP_INV_MASK", PyInt_FromLong(XT_TCP_INV_MASK));
+	OBJECT_ADD_INT(m, "TCP_FLAG_FIN", 0x01);
+	OBJECT_ADD_INT(m, "TCP_FLAG_SYN", 0x02);
+	OBJECT_ADD_INT(m, "TCP_FLAG_RST", 0x04);
+	OBJECT_ADD_INT(m, "TCP_FLAG_PSH", 0x08);
+	OBJECT_ADD_INT(m, "TCP_FLAG_ACK", 0x10);
+	OBJECT_ADD_INT(m, "TCP_FLAG_URG", 0x20);
+	OBJECT_ADD_INT(m, "TCP_FLAG_ALL", 0x3F);
+	OBJECT_ADD_INT(m, "TCP_FLAG_NONE", 0x0);
+	OBJECT_ADD_INT(m, "XT_TCP_INV_SRCPT", XT_TCP_INV_SRCPT);
+	OBJECT_ADD_INT(m, "XT_TCP_INV_DSTPT", XT_TCP_INV_DSTPT);
+	OBJECT_ADD_INT(m, "XT_TCP_INV_FLAGS", XT_TCP_INV_FLAGS);
+	OBJECT_ADD_INT(m, "XT_TCP_INV_OPTION", XT_TCP_INV_OPTION);
+	OBJECT_ADD_INT(m, "XT_TCP_INV_MASK", XT_TCP_INV_MASK);
 	/* ctstate flags */	
-	PyModule_AddObject(m, "CT_INVALID",
-			PyInt_FromLong(XT_CONNTRACK_STATE_INVALID));
-	PyModule_AddObject(m, "CT_NEW",
-			PyInt_FromLong(XT_CONNTRACK_STATE_BIT(IP_CT_NEW)));
-	PyModule_AddObject(m, "CT_ESTABLISHED",
-			PyInt_FromLong(XT_CONNTRACK_STATE_BIT(IP_CT_ESTABLISHED)));
-	PyModule_AddObject(m, "CT_RELATED",
-			PyInt_FromLong(XT_CONNTRACK_STATE_BIT(IP_CT_RELATED)));
-	PyModule_AddObject(m, "CT_UNTRACKED",
-			PyInt_FromLong(XT_CONNTRACK_STATE_UNTRACKED));
-	PyModule_AddObject(m, "CT_SNAT",
-			PyInt_FromLong(XT_CONNTRACK_STATE_SNAT));
-	PyModule_AddObject(m, "CT_DNAT",
-			PyInt_FromLong(XT_CONNTRACK_STATE_DNAT));	
+	OBJECT_ADD_INT(m, "CT_INVALID",
+			XT_CONNTRACK_STATE_INVALID);
+	OBJECT_ADD_INT(m, "CT_NEW", XT_CONNTRACK_STATE_BIT(IP_CT_NEW));
+	OBJECT_ADD_INT(m, "CT_ESTABLISHED", XT_CONNTRACK_STATE_BIT(IP_CT_ESTABLISHED));
+	OBJECT_ADD_INT(m, "CT_RELATED", XT_CONNTRACK_STATE_BIT(IP_CT_RELATED));
+	OBJECT_ADD_INT(m, "CT_UNTRACKED",
+			XT_CONNTRACK_STATE_UNTRACKED);
+	OBJECT_ADD_INT(m, "CT_SNAT",
+			XT_CONNTRACK_STATE_SNAT);
+	OBJECT_ADD_INT(m, "CT_DNAT",
+			XT_CONNTRACK_STATE_DNAT);	
 	/* icmp type, total 18*/
-	PyModule_AddObject(m, "ICMP_ECHOREPLY", PyInt_FromLong(ICMP_ECHOREPLY));			
-	PyModule_AddObject(m, "ICMP_DEST_UNREACH", PyInt_FromLong(ICMP_DEST_UNREACH));
-	PyModule_AddObject(m, "ICMP_SOURCE_QUENCH", PyInt_FromLong(ICMP_SOURCE_QUENCH));
-	PyModule_AddObject(m, "ICMP_REDIRECT", PyInt_FromLong(ICMP_REDIRECT));
-	PyModule_AddObject(m, "ICMP_ECHO", PyInt_FromLong(ICMP_ECHO));
-	PyModule_AddObject(m, "ICMP_TIME_EXCEEDED", PyInt_FromLong(ICMP_TIME_EXCEEDED));
-	PyModule_AddObject(m, "ICMP_PARAMETERPROB", PyInt_FromLong(ICMP_PARAMETERPROB));
-	PyModule_AddObject(m, "ICMP_TIMESTAMP", PyInt_FromLong(ICMP_TIMESTAMP));
-	PyModule_AddObject(m, "ICMP_TIMESTAMPREPLY", PyInt_FromLong(ICMP_TIMESTAMPREPLY));
-	PyModule_AddObject(m, "ICMP_INFO_REQUEST", PyInt_FromLong(ICMP_INFO_REQUEST));
-	PyModule_AddObject(m, "ICMP_INFO_REPLY", PyInt_FromLong(ICMP_INFO_REPLY));
-	PyModule_AddObject(m, "ICMP_ADDRESS", PyInt_FromLong(ICMP_ADDRESS));
-	PyModule_AddObject(m, "ICMP_ADDRESSREPLY", PyInt_FromLong(ICMP_ADDRESSREPLY));
+	OBJECT_ADD_INT(m, "ICMP_ECHOREPLY", ICMP_ECHOREPLY);			
+	OBJECT_ADD_INT(m, "ICMP_DEST_UNREACH", ICMP_DEST_UNREACH);
+	OBJECT_ADD_INT(m, "ICMP_SOURCE_QUENCH", ICMP_SOURCE_QUENCH);
+	OBJECT_ADD_INT(m, "ICMP_REDIRECT", ICMP_REDIRECT);
+	OBJECT_ADD_INT(m, "ICMP_ECHO", ICMP_ECHO);
+	OBJECT_ADD_INT(m, "ICMP_TIME_EXCEEDED", ICMP_TIME_EXCEEDED);
+	OBJECT_ADD_INT(m, "ICMP_PARAMETERPROB", ICMP_PARAMETERPROB);
+	OBJECT_ADD_INT(m, "ICMP_TIMESTAMP", ICMP_TIMESTAMP);
+	OBJECT_ADD_INT(m, "ICMP_TIMESTAMPREPLY", ICMP_TIMESTAMPREPLY);
+	OBJECT_ADD_INT(m, "ICMP_INFO_REQUEST", ICMP_INFO_REQUEST);
+	OBJECT_ADD_INT(m, "ICMP_INFO_REPLY", ICMP_INFO_REPLY);
+	OBJECT_ADD_INT(m, "ICMP_ADDRESS", ICMP_ADDRESS);
+	OBJECT_ADD_INT(m, "ICMP_ADDRESSREPLY", ICMP_ADDRESSREPLY);
 	/* icmp for unreach  total 15*/
-	PyModule_AddObject(m, "ICMP_NET_UNREACH", PyInt_FromLong(ICMP_NET_UNREACH));
-	PyModule_AddObject(m, "ICMP_HOST_UNREACH", PyInt_FromLong(ICMP_HOST_UNREACH));
-	PyModule_AddObject(m, "ICMP_PROT_UNREACH", PyInt_FromLong(ICMP_PROT_UNREACH));
-	PyModule_AddObject(m, "ICMP_PORT_UNREACH", PyInt_FromLong(ICMP_PORT_UNREACH));
-	PyModule_AddObject(m, "ICMP_FRAG_NEEDED", PyInt_FromLong(ICMP_FRAG_NEEDED));
-	PyModule_AddObject(m, "ICMP_SR_FAILED", PyInt_FromLong(ICMP_SR_FAILED));
-	PyModule_AddObject(m, "ICMP_NET_UNKNOWN", PyInt_FromLong(ICMP_NET_UNKNOWN));
-	PyModule_AddObject(m, "ICMP_HOST_UNKNOWN", PyInt_FromLong(ICMP_HOST_UNKNOWN));
-	PyModule_AddObject(m, "ICMP_HOST_ISOLATED", PyInt_FromLong(ICMP_HOST_ISOLATED));
-	PyModule_AddObject(m, "ICMP_NET_ANO", PyInt_FromLong(ICMP_NET_ANO));
-	PyModule_AddObject(m, "ICMP_HOST_ANO", PyInt_FromLong(ICMP_HOST_ANO));
-	PyModule_AddObject(m, "ICMP_NET_UNR_TOS", PyInt_FromLong(ICMP_NET_UNR_TOS));
-	PyModule_AddObject(m, "ICMP_HOST_UNR_TOS", PyInt_FromLong(ICMP_NET_UNR_TOS));
-	PyModule_AddObject(m, "ICMP_PKT_FILTERED", PyInt_FromLong(ICMP_PKT_FILTERED));
-	PyModule_AddObject(m, "ICMP_PREC_VIOLATION", PyInt_FromLong(ICMP_PREC_VIOLATION));
-	PyModule_AddObject(m, "ICMP_PREC_CUTOFF", PyInt_FromLong(ICMP_PREC_CUTOFF));
+	OBJECT_ADD_INT(m, "ICMP_NET_UNREACH", ICMP_NET_UNREACH);
+	OBJECT_ADD_INT(m, "ICMP_HOST_UNREACH", ICMP_HOST_UNREACH);
+	OBJECT_ADD_INT(m, "ICMP_PROT_UNREACH", ICMP_PROT_UNREACH);
+	OBJECT_ADD_INT(m, "ICMP_PORT_UNREACH", ICMP_PORT_UNREACH);
+	OBJECT_ADD_INT(m, "ICMP_FRAG_NEEDED", ICMP_FRAG_NEEDED);
+	OBJECT_ADD_INT(m, "ICMP_SR_FAILED", ICMP_SR_FAILED);
+	OBJECT_ADD_INT(m, "ICMP_NET_UNKNOWN", ICMP_NET_UNKNOWN);
+	OBJECT_ADD_INT(m, "ICMP_HOST_UNKNOWN", ICMP_HOST_UNKNOWN);
+	OBJECT_ADD_INT(m, "ICMP_HOST_ISOLATED", ICMP_HOST_ISOLATED);
+	OBJECT_ADD_INT(m, "ICMP_NET_ANO", ICMP_NET_ANO);
+	OBJECT_ADD_INT(m, "ICMP_HOST_ANO", ICMP_HOST_ANO);
+	OBJECT_ADD_INT(m, "ICMP_NET_UNR_TOS", ICMP_NET_UNR_TOS);
+	OBJECT_ADD_INT(m, "ICMP_HOST_UNR_TOS", ICMP_NET_UNR_TOS);
+	OBJECT_ADD_INT(m, "ICMP_PKT_FILTERED", ICMP_PKT_FILTERED);
+	OBJECT_ADD_INT(m, "ICMP_PREC_VIOLATION", ICMP_PREC_VIOLATION);
+	OBJECT_ADD_INT(m, "ICMP_PREC_CUTOFF", ICMP_PREC_CUTOFF);
 	/* REDIRECT, total 3 */	
-	PyModule_AddObject(m, "ICMP_REDIR_NET", PyInt_FromLong(ICMP_REDIR_NET));
-	PyModule_AddObject(m, "ICMP_REDIR_HOST", PyInt_FromLong(ICMP_REDIR_HOST));
-	PyModule_AddObject(m, "ICMP_REDIR_NETTOS", PyInt_FromLong(ICMP_REDIR_NETTOS));
-	PyModule_AddObject(m, "ICMP_REDIR_HOSTTOS", PyInt_FromLong(ICMP_REDIR_HOSTTOS));
+	OBJECT_ADD_INT(m, "ICMP_REDIR_NET", ICMP_REDIR_NET);
+	OBJECT_ADD_INT(m, "ICMP_REDIR_HOST", ICMP_REDIR_HOST);
+	OBJECT_ADD_INT(m, "ICMP_REDIR_NETTOS", ICMP_REDIR_NETTOS);
+	OBJECT_ADD_INT(m, "ICMP_REDIR_HOSTTOS", ICMP_REDIR_HOSTTOS);
 	/* TIME_EXCEEDED */
-	PyModule_AddObject(m, "ICMP_EXC_TTL", PyInt_FromLong(ICMP_EXC_TTL));
-	PyModule_AddObject(m, "ICMP_EXC_FRAGTIME", PyInt_FromLong(ICMP_EXC_FRAGTIME)); 
-	PyModule_AddObject(m, "IPT_ICMP_INV", PyInt_FromLong(IPT_ICMP_INV));
+	OBJECT_ADD_INT(m, "ICMP_EXC_TTL", ICMP_EXC_TTL);
+	OBJECT_ADD_INT(m, "ICMP_EXC_FRAGTIME", ICMP_EXC_FRAGTIME); 
+	OBJECT_ADD_INT(m, "IPT_ICMP_INV", IPT_ICMP_INV);
 	/* packet type */
-	PyModule_AddObject(m, "PACKET_HOST", PyInt_FromLong(PACKET_HOST));
-	PyModule_AddObject(m, "PACKET_BROADCAST", PyInt_FromLong(PACKET_BROADCAST));
-	PyModule_AddObject(m, "PACKET_MULTICAST", PyInt_FromLong(PACKET_MULTICAST));
-	PyModule_AddObject(m, "PACKET_OTHERHOST", PyInt_FromLong(PACKET_OTHERHOST));
-	PyModule_AddObject(m, "PACKET_OUTGOING", PyInt_FromLong(PACKET_OUTGOING));
+	OBJECT_ADD_INT(m, "PACKET_HOST", PACKET_HOST);
+	OBJECT_ADD_INT(m, "PACKET_BROADCAST", PACKET_BROADCAST);
+	OBJECT_ADD_INT(m, "PACKET_MULTICAST", PACKET_MULTICAST);
+	OBJECT_ADD_INT(m, "PACKET_OTHERHOST", PACKET_OTHERHOST);
+	OBJECT_ADD_INT(m, "PACKET_OUTGOING", PACKET_OUTGOING);
 	/* target LOG, syslog consts */
-	PyModule_AddObject(m, "LOG_ALERT", PyInt_FromLong(LOG_ALERT));
-	PyModule_AddObject(m, "LOG_CRIT", PyInt_FromLong(LOG_CRIT));
-	PyModule_AddObject(m, "LOG_DEBUG", PyInt_FromLong(LOG_DEBUG));
-	PyModule_AddObject(m, "LOG_EMERG", PyInt_FromLong(LOG_EMERG));
-	PyModule_AddObject(m, "LOG_ERR", PyInt_FromLong(LOG_ERR));
-	PyModule_AddObject(m, "LOG_INFO", PyInt_FromLong(LOG_INFO));
-	PyModule_AddObject(m, "LOG_NOTICE", PyInt_FromLong(LOG_NOTICE)); 
-	PyModule_AddObject(m, "LOG_WARNING", PyInt_FromLong(LOG_WARNING));
+	OBJECT_ADD_INT(m, "LOG_ALERT", LOG_ALERT);
+	OBJECT_ADD_INT(m, "LOG_CRIT", LOG_CRIT);
+	OBJECT_ADD_INT(m, "LOG_DEBUG", LOG_DEBUG);
+	OBJECT_ADD_INT(m, "LOG_EMERG", LOG_EMERG);
+	OBJECT_ADD_INT(m, "LOG_ERR", LOG_ERR);
+	OBJECT_ADD_INT(m, "LOG_INFO", LOG_INFO);
+	OBJECT_ADD_INT(m, "LOG_NOTICE", LOG_NOTICE); 
+	OBJECT_ADD_INT(m, "LOG_WARNING", LOG_WARNING);
 
-	PyModule_AddObject(m, "LOG_TCPSEQ", PyInt_FromLong(IPT_LOG_TCPSEQ));
-	PyModule_AddObject(m, "LOG_TCPOPT", PyInt_FromLong(IPT_LOG_TCPOPT));
-	PyModule_AddObject(m, "LOG_IPOPT", PyInt_FromLong(IPT_LOG_IPOPT));
-	PyModule_AddObject(m, "LOG_UID", PyInt_FromLong(IPT_LOG_UID));
-	PyModule_AddObject(m, "LOG_MACDECODE", PyInt_FromLong(IPT_LOG_MACDECODE));
+	OBJECT_ADD_INT(m, "LOG_TCPSEQ", IPT_LOG_TCPSEQ);
+	OBJECT_ADD_INT(m, "LOG_TCPOPT", IPT_LOG_TCPOPT);
+	OBJECT_ADD_INT(m, "LOG_IPOPT", IPT_LOG_IPOPT);
+	OBJECT_ADD_INT(m, "LOG_UID", IPT_LOG_UID);
+	OBJECT_ADD_INT(m, "LOG_MACDECODE", IPT_LOG_MACDECODE);
 	/* target REJECT consts */
-	PyModule_AddObject(m, "IPT_ICMP_NET_UNREACHABLE", PyInt_FromLong(IPT_ICMP_NET_UNREACHABLE));
-	PyModule_AddObject(m, "IPT_ICMP_HOST_UNREACHABLE", PyInt_FromLong(IPT_ICMP_HOST_UNREACHABLE));
-	PyModule_AddObject(m, "IPT_ICMP_PROT_UNREACHABLE", PyInt_FromLong(IPT_ICMP_PROT_UNREACHABLE));
-	PyModule_AddObject(m, "IPT_ICMP_PORT_UNREACHABLE", PyInt_FromLong(IPT_ICMP_PORT_UNREACHABLE));
-	PyModule_AddObject(m, "IPT_ICMP_ECHOREPLY", PyInt_FromLong(IPT_ICMP_ECHOREPLY));
-	PyModule_AddObject(m, "IPT_ICMP_NET_PROHIBITED", PyInt_FromLong(IPT_ICMP_NET_PROHIBITED));
-	PyModule_AddObject(m, "IPT_ICMP_HOST_PROHIBITED", PyInt_FromLong(IPT_ICMP_HOST_PROHIBITED));
-	PyModule_AddObject(m, "IPT_TCP_RESET", PyInt_FromLong(IPT_TCP_RESET));
-	PyModule_AddObject(m, "IPT_ICMP_ADMIN_PROHIBITED", PyInt_FromLong(IPT_ICMP_ADMIN_PROHIBITED));
+	OBJECT_ADD_INT(m, "IPT_ICMP_NET_UNREACHABLE", IPT_ICMP_NET_UNREACHABLE);
+	OBJECT_ADD_INT(m, "IPT_ICMP_HOST_UNREACHABLE", IPT_ICMP_HOST_UNREACHABLE);
+	OBJECT_ADD_INT(m, "IPT_ICMP_PROT_UNREACHABLE", IPT_ICMP_PROT_UNREACHABLE);
+	OBJECT_ADD_INT(m, "IPT_ICMP_PORT_UNREACHABLE", IPT_ICMP_PORT_UNREACHABLE);
+	OBJECT_ADD_INT(m, "IPT_ICMP_ECHOREPLY", IPT_ICMP_ECHOREPLY);
+	OBJECT_ADD_INT(m, "IPT_ICMP_NET_PROHIBITED", IPT_ICMP_NET_PROHIBITED);
+	OBJECT_ADD_INT(m, "IPT_ICMP_HOST_PROHIBITED", IPT_ICMP_HOST_PROHIBITED);
+	OBJECT_ADD_INT(m, "IPT_TCP_RESET", IPT_TCP_RESET);
+	OBJECT_ADD_INT(m, "IPT_ICMP_ADMIN_PROHIBITED", IPT_ICMP_ADMIN_PROHIBITED);
+#undef OBJECT_ADD_INT
 	} 
 }
+
+#undef DICT_GET_INT
+#undef DICT_GET_ULONG
+#undef DICT_GET_STRING
+#undef DICT_STORE_INT
+#undef DICT_STORE_ULONG
+#undef DICT_STORE_STRING
