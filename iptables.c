@@ -29,30 +29,57 @@
 
 #define XTABLES_VERSION "9" 
 
-#define HOOK_PRE_ROUTING	NF_IP_PRE_ROUTING
-#define HOOK_LOCAL_IN		NF_IP_LOCAL_IN
-#define HOOK_FORWARD		NF_IP_FORWARD
-#define HOOK_LOCAL_OUT		NF_IP_LOCAL_OUT
-#define HOOK_POST_ROUTING	NF_IP_POST_ROUTING 
+#define DICT_GET_INT(x, y) PyInt_AsLong(PyDict_GetItemString(x, y))
+#define DICT_GET_ULONG(x, y) PyLong_AsUnsignedLong(PyDict_GetItemString(x, y))
+#define DICT_GET_STRING(x, y) PyString_AsString(PyDict_GetItemString(x, y))
+#define DICT_STORE_INT(x, y, z) PyDict_SetItemString(x, y, PyInt_FromLong(z))
+#define DICT_STORE_ULONG(x, y, z) PyDict_SetItemString(x, y, PyLong_FromUnsignedLong(z))
+#define DICT_STORE_STRING(x, y, z) PyDict_SetItemString(x, y, PyString_FromString(z))
 
 
 struct replace_context {
 	struct ipt_replace *replace;
 	struct ipt_getinfo *info;
-	unsigned int current_offset;
-	unsigned int last_chain_end;
-	unsigned int memory_size;
+	unsigned offset;
+	unsigned last_chain_end;
+	unsigned memory_size;
 	void *memory; 
 };
 
-static const char *hooknames[] = {
-	[HOOK_PRE_ROUTING]	= "PREROUTING",
-	[HOOK_LOCAL_IN]		= "INPUT",
-	[HOOK_FORWARD]		= "FORWARD",
-	[HOOK_LOCAL_OUT]	= "OUTPUT",
-	[HOOK_POST_ROUTING]	= "POSTROUTING",
+struct chain_head {
+	struct ipt_entry e;
+	struct xt_error_target name;
+}; 
+
+struct chain_foot {
+	struct ipt_entry e;
+	struct xt_standard_target target;
 };
 
+struct chain_error {
+	struct ipt_entry e;
+	struct xt_error_target target;
+};
+static const char *hooknames[] = {
+	[NF_IP_PRE_ROUTING]	= "PREROUTING",
+	[NF_IP_LOCAL_IN]	= "INPUT",
+	[NF_IP_FORWARD]		= "FORWARD",
+	[NF_IP_LOCAL_OUT]	= "OUTPUT",
+	[NF_IP_POST_ROUTING]	= "POSTROUTING",
+};
+
+
+static int
+is_builtin(char *chain_name)
+{
+	unsigned i;
+	for(i = 0; i <= NF_IP_POST_ROUTING; i++) {
+		if (strcmp(chain_name, hooknames[i]) == 0) {
+			return i;
+		}
+	}
+	return -1; 
+}
 
 static struct ipt_entry *
 offset_get_entry(struct ipt_get_entries *entries, unsigned int offset)
@@ -83,12 +110,6 @@ entry_is_hook_entry(struct ipt_entry *e, struct ipt_getinfo *info,
 	return 0;
 }
 
-#define DICT_GET_INT(x, y) PyInt_AsLong(PyDict_GetItemString(x, y))
-#define DICT_GET_ULONG(x, y) PyLong_AsUnsignedLong(PyDict_GetItemString(x, y))
-#define DICT_GET_STRING(x, y) PyString_AsString(PyDict_GetItemString(x, y))
-#define DICT_STORE_INT(x, y, z) PyDict_SetItemString(x, y, PyInt_FromLong(z))
-#define DICT_STORE_ULONG(x, y, z) PyDict_SetItemString(x, y, PyLong_FromUnsignedLong(z))
-#define DICT_STORE_STRING(x, y, z) PyDict_SetItemString(x, y, PyString_FromString(z))
 
 static int
 handle_match_pkttype(PyObject *match_dict, void *data, unsigned write)
@@ -147,8 +168,7 @@ handle_match_tcp(PyObject *match_dict, void *data, unsigned write)
 static int
 handle_match_conntrack(PyObject *match_dict, void *data, unsigned write)
 { 
-	if (write == 0) {
-
+	if (write == 0) { 
 		struct xt_conntrack_mtinfo3 *info = data;
 		if (info->match_flags & XT_CONNTRACK_STATE) { 
 			DICT_STORE_ULONG(match_dict, "state",
@@ -308,8 +328,6 @@ parse_match(struct xt_entry_match *m, PyObject *matches_dict)
 	} 
 	PyDict_SetItemString(matches_dict, m->u.user.name,
                     match_dict); 
-
-	return 0; 
 RETURN:
 	return 0;
 }
@@ -317,6 +335,9 @@ RETURN:
 static int parse_matches(PyObject *rule_dict, struct ipt_entry *e)
 { 
 	PyObject *matches_dict = NULL;
+	if (!(rule_dict && e)) {
+		return 1;
+	} 
 	/* matches */
 	matches_dict = PyDict_New(); 
 	XT_MATCH_ITERATE(struct ipt_entry, e, parse_match, matches_dict); 
@@ -325,29 +346,25 @@ static int parse_matches(PyObject *rule_dict, struct ipt_entry *e)
 }
 
 static int
-parse_targets(PyObject *rule_dict, struct xt_entry_target *t, struct ipt_entry *e, struct ipt_get_entries *entries)
+parse_target(PyObject *rule_dict, struct xt_entry_target *t, struct ipt_entry *e, struct ipt_get_entries *entries)
 { 
-	/* target */
 	struct xt_standard_target *xt = (void *)t; 
+	if (!(rule_dict && t && e && entries)) {
+		return 1;
+	}
+	/* target */ 
 	if (strcmp(t->u.user.name, XT_STANDARD_TARGET) == 0) { 
 		if (xt->verdict < 0) {
 			DICT_STORE_STRING(rule_dict, "target_type",
 					"standard"); 
-			DICT_STORE_STRING(rule_dict, "verb",
-				xt->verdict == -NF_ACCEPT-1 ? "ACCEPT"
-				: xt->verdict == -NF_DROP-1 ? "DROP"
-				: xt->verdict == -NF_QUEUE-1 ?"QUEUE"
-				: xt->verdict == XT_RETURN ? "RETURN"
-				: "UNKNOWN");
 		} else if (xt->verdict == entry_get_offset(entries, e) + e->next_offset) {
 			DICT_STORE_STRING(rule_dict, "target_type",
-					"fallthrough");
-			DICT_STORE_INT(rule_dict, "verb", xt->verdict); 
+					"fallthrough"); 
 		} else {
 			DICT_STORE_STRING(rule_dict, "target_type",
 					"jump"); 
-			DICT_STORE_INT(rule_dict, "verb", xt->verdict); 
 		}
+		DICT_STORE_INT(rule_dict, "verb", xt->verdict); 
 	}  else {
 		/* target extension */
 		PyObject *target_dict;
@@ -356,8 +373,7 @@ parse_targets(PyObject *rule_dict, struct xt_entry_target *t, struct ipt_entry *
 			handle_target_log(target_dict, t->data, 0); 
 			PyDict_SetItemString(rule_dict, "target_dict",
 					target_dict);
-		} 
-		if (strcmp(t->u.user.name, "REJECT") == 0) {
+		} else if (strcmp(t->u.user.name, "REJECT") == 0) {
 			handle_target_reject(target_dict, t->data, 0);
 			PyDict_SetItemString(rule_dict, "target_dict",
 					target_dict);
@@ -417,6 +433,8 @@ parse_entry(struct ipt_entry *e, PyObject *chains_dict,
 	DICT_STORE_ULONG(rule_dict, "bytes", e->counters.bcnt);
 	DICT_STORE_ULONG(rule_dict, "cache", e->nfcache); 
 
+	/* matches */
+	parse_matches(rule_dict, e);
 	/* target */
 	t = (void *)e + e->target_offset;
 	DICT_STORE_STRING(rule_dict, "target", t->u.user.name); 
@@ -434,13 +452,13 @@ parse_entry(struct ipt_entry *e, PyObject *chains_dict,
 				(char *)hooknames[builtin-1],
 				*current_chain_ptr); 
 	} 
-	parse_targets(rule_dict, t, e, entries);
+	parse_target(rule_dict, t, e, entries);
 	/* add rule to current_chain */
-	if (*current_chain_ptr) 
+	if (*current_chain_ptr) {
 		return PyList_Append(*current_chain_ptr, rule_dict) ? 1 : 0; 
-	else
+	} else {
 		return 1;
-
+	}
 }
 
 static PyObject *
@@ -508,14 +526,12 @@ iptables_get_table(PyObject *object, PyObject *args)
 	strcpy(info->name, tablename);
 	if (getsockopt(sockfd, IPPROTO_IP,
 				IPT_SO_GET_INFO, info, &s) < 0) {
-		PyErr_SetFromErrno(PyExc_OSError);
-		PyMem_Free(info);
-		goto ERROR; 
+		PyErr_SetFromErrno(PyExc_OSError); 
+		goto FREE_INFO; 
 	} 
 	entries = PyMem_Malloc(sizeof(struct ipt_get_entries) + info->size);
-	if (!entries) {
-		PyMem_Free(info);
-		goto ERROR;
+	if (!entries) { 
+		goto FREE_INFO;
 	}
 	entries->size = info->size; 
 	strcpy(entries->name, info->name);
@@ -523,34 +539,43 @@ iptables_get_table(PyObject *object, PyObject *args)
 	if (getsockopt(sockfd, IPPROTO_IP,
 				IPT_SO_GET_ENTRIES, entries, &tmp) < 0) {
 		PyErr_SetFromErrno(PyExc_OSError);	
-		PyMem_Free(info);
-		PyMem_Free(entries);
-		goto ERROR;
+		goto FREE_ENTRIES;
 	}
 	close(sockfd); 
 	return parse_entries(info, entries); 
+FREE_ENTRIES:
+	PyMem_Free(entries);
+FREE_INFO:
+	PyMem_Free(info); 
 ERROR:	
 	close(sockfd); 
 	return NULL;
 }
 
 
+static int
+compile_target(void **base, PyObject *this_target, unsigned int *offset)
+{
+	return 1;
+}
+
 static int 
-compile_match(void **base, PyObject *this_match) 
+compile_matches(void **base, PyObject *this_match, unsigned int *offset) 
 {
 	/*supress gcc warning*/
-	struct xt_entry_match *match_entry = *base;
 	const char *keystr = NULL;
-	PyObject *plugin_name = PyTuple_GetItem(this_match, 0);
+	struct xt_entry_match *match_entry = *base; 
+	PyObject *match_name = PyTuple_GetItem(this_match, 0);
 	PyObject *match_dict = PyTuple_GetItem(this_match, 1);
 
-	if ((plugin_name == NULL) | (match_dict == NULL)) {
+	if ((match_name == NULL) | (match_dict == NULL)) {
 		return 0;
 	}
-	*base += sizeof(struct xt_entry_match);
-	match_entry->u.user.revision = 3;
-
-	keystr = PyString_AsString(plugin_name);
+	/*move forward */
+	*base += sizeof(struct xt_entry_match); 
+	*offset += sizeof(struct xt_entry_match);
+	match_entry->u.user.revision = 3; 
+	keystr = PyString_AsString(match_name);
 	if (strcmp(keystr, "tcp") == 0) { 
 		handle_match_tcp(match_dict, *base,  1);
 		strcpy(match_entry->u.user.name, keystr);
@@ -561,33 +586,37 @@ compile_match(void **base, PyObject *this_match)
 		strcpy(match_entry->u.user.name, keystr);
 		match_entry->u.match_size = sizeof(struct xt_pkttype_info);
 		*base += sizeof(struct xt_pkttype_info);
+		*offset += sizeof(struct xt_pkttype_info);
 	}  else if (strcmp(keystr, "conntrack")) {
 		/* conntrack plugin */
 		handle_match_conntrack(match_dict, *base, 1);
 		strcpy(match_entry->u.user.name, keystr);
 		match_entry->u.match_size = sizeof(struct xt_conntrack_mtinfo3);
 		*base += sizeof(struct xt_conntrack_mtinfo3);
+		*offset += sizeof(struct xt_conntrack_mtinfo3);
 	} else if (strcmp(keystr, "limit")) {
 		/* limit plugin */
 		handle_match_limit(match_dict, *base, 1);	
 		strcpy(match_entry->u.user.name, keystr);
 		match_entry->u.match_size = sizeof(struct xt_rateinfo);
 		*base += sizeof(struct xt_rateinfo);
+		*offset += sizeof(struct xt_rateinfo);
 	} else if (strcmp(keystr, "icmp")) {
 		/* icmp plugin */
 		handle_match_icmp(match_dict, *base, 1);
 		strcpy(match_entry->u.user.name, keystr);
 		match_entry->u.match_size = sizeof(struct ipt_icmp);
 		*base += sizeof(struct ipt_icmp);
+		*offset += sizeof(struct ipt_icmp);
 	}
 	return 1;
 }
 
 static int
-compile_rule(PyObject *rule_dict, struct ipt_entry *this_entry, unsigned int *current_offset)
+compile_rule(PyObject *rule_dict, struct ipt_entry *this_entry, unsigned int *offset)
 { 
-	struct xt_entry_match *match_entry_base = NULL;
-	/*convert entry, match, target plugins */
+	struct xt_entry_match *base = NULL;
+	/*copy ipt_entry */
 	this_entry->ip.src.s_addr = DICT_GET_ULONG(rule_dict, "srcip");
 	this_entry->ip.dst.s_addr = DICT_GET_ULONG(rule_dict, "dstip");
 	this_entry->ip.smsk.s_addr = DICT_GET_ULONG(rule_dict, "srcip_mask");
@@ -605,14 +634,14 @@ compile_rule(PyObject *rule_dict, struct ipt_entry *this_entry, unsigned int *cu
 	this_entry->counters.pcnt = DICT_GET_ULONG(rule_dict, "packets");
 	this_entry->counters.bcnt = DICT_GET_ULONG(rule_dict, "bytes");
 	this_entry->nfcache = DICT_GET_ULONG(rule_dict, "bytes");	
-	/*iter over matches */
-	match_entry_base = (void *)this_entry + sizeof(struct ipt_entry);
+	/*move forward, copy matches */
+	base = (void *)this_entry + sizeof(struct ipt_entry);
 	PyObject *matches_dict = PyDict_GetItemString(rule_dict, "matches");
 	PyObject *matches_dict_iter = PyObject_GetIter(PyDict_Items(matches_dict)); 
 	int ret;
 	PyObject *matches_dict_next = PyIter_Next(matches_dict_iter);
 	while (matches_dict_next) {
-		ret = compile_match((void **)match_entry_base, matches_dict_next);
+		ret = compile_matches((void **)(&base), matches_dict_next, offset);
 		Py_XDECREF(matches_dict_next);
 		if (!ret) {
 			Py_XDECREF(matches_dict_iter);	
@@ -625,64 +654,63 @@ CLEAR:
 	return 0; 
 }
 
+
 static int 
 compile_chain(struct replace_context *context, PyObject *chain_name,  PyObject *rule_list)
-{
-	PyObject *chain_offset;
-	PyObject *rule0_dict; 
-	int chain_header_offset;
-	unsigned int current_offset;
-	struct ipt_entry *chain_header; 
-	struct ipt_entry *chain_footer;	
-	if (!rule_list) {
+{ 
+	int hooknum = 0; 
+	unsigned int offset = 0;
+	struct chain_head *header = NULL; 
+
+	if (!(context && chain_name && rule_list)) {
 		goto CLEAR;
 	} 
+	/*add chain header */
+	hooknum = is_builtin(PyString_AsString(chain_name));
+	if (hooknum < 0) { 
+		header = context->memory;
+		header->e.target_offset = sizeof(struct ipt_entry); 
+		strcpy(header->name.target.u.user.name, XT_ERROR_TARGET); 
+		header->name.target.u.target_size = 
+			XT_ALIGN(sizeof(struct xt_error_target));
+		strcpy(header->name.errorname, PyString_AsString(chain_name));
+		context->memory += sizeof(struct chain_head); 
+		offset += sizeof(struct chain_head);
+	} else { 
+		/*add hook */
+		context->replace->hook_entry[hooknum] =(unsigned long)context->memory;
+		/* add underflow later */	
+	}
+
 	PyObject *rule_list_iter = PyObject_GetIter(rule_list); 
 	if (!rule_list_iter) {
 		goto CLEAR;
 	}
-	current_offset = 0;
+
 	PyObject *rule_list_next = PyIter_Next(rule_list_iter);
 	while(rule_list_next) { 
+		/*translate and copy chain */
 		struct ipt_entry *this_entry = context->memory;
 		if(!this_entry) {
 			Py_XDECREF(rule_list_iter); 
 			goto CLEAR;
 		}
-		int rule_ret = compile_rule(rule_list_next, this_entry, &current_offset);
+		int rule_ret = compile_rule(rule_list_next, this_entry, &offset); 
 		Py_XDECREF(rule_list_next);
 		if(!rule_ret) {
 			Py_XDECREF(rule_list_iter); 
 			goto CLEAR;
 		} 
+		/* move forward */
+		context->memory += offset;
 		rule_list_next = PyIter_Next(rule_list_iter);
-	}
-	rule0_dict = PyList_GetItem(rule_list, 0);	
-	chain_offset = PyDict_GetItemString(rule0_dict, "offset"); 
-	chain_header_offset = PyInt_AsLong(chain_offset);
-	int i; 
-	for (i = 0; i < NF_IP_NUMHOOKS; i++) { 
-		if ((context->info->valid_hooks & (1 << i))
-			&& ((context->info->hook_entry[i]) == chain_header_offset)) { 
-			i = -1;
-			break;
-		}
-	}
-	/* only user-defined chains have header */		
-	if (i > 0) {
-		/*
-		chain_header = context->memory;	
-		chain_header->target_offset = sizeof(struct ipt_entry);
-		chain_header->next_offset = (sizeof(struct ipt_entry) +\
-				XT_ALIGN(sizeof(struct xt_error_target)));
-		strcpy(chain_header->name.target.u.user.name, "ERROR");
-		chain_header->name.target.u.target_size = XT_ALIGN(sizeof(struct xt_error_target));
-		strcpy(chain_header->name.errorname, PyString_AsString(chain_name)); 
-		*/
-	} else {
-		
-	}
-	
+	} 
+
+	if (hooknum > 0) {
+		/* add underflow */
+		context->replace->underflow[hooknum] = (unsigned long)context->memory; 
+	} 
+	return 1;
 CLEAR:	
 	if (!PyErr_Occurred()) {
 		PyErr_SetString(PyExc_OSError, "iptables runtime error");
@@ -694,21 +722,24 @@ PyDoc_STRVAR(iptables_replace_table_doc, "replace this table in kernel");
 
 static PyObject *
 iptables_replace_table(PyObject *object, PyObject *args)
-{
-	PyObject *table_dict;
-	PyObject *chains_dict;
-	PyObject *chains_keys; 
-	PyObject *tablename;
-	int sockfd; 
-	socklen_t info_size; 
-	struct xt_counters_info *counter_info; 
-	struct ipt_getinfo *info;
-	struct ipt_replace *replace;
-	struct replace_context context;
+{ 
+	int sockfd = 0; 
+	socklen_t info_size = 0; 
+	PyObject *table_dict = NULL;
+	PyObject *chains_dict = NULL;
+	PyObject *chains_keys = NULL; 
+	PyObject *tablename = NULL;
+
+	//struct xt_counters_info *counter_info = NULL; 
+	struct ipt_getinfo *info = NULL;
+	struct ipt_replace *replace = NULL;
+	struct chain_error *error = NULL;
+	struct replace_context context; 
 
 	if (!PyArg_ParseTuple(args, "O|replace_table", &table_dict)) {
 		return NULL;
 	} 
+
 	/* check tablename */
 	tablename = PyDict_GetItemString(table_dict, "name");
 	if (!tablename) {
@@ -740,8 +771,8 @@ iptables_replace_table(PyObject *object, PyObject *args)
 	info_size = sizeof(struct ipt_getinfo);
 	memset(info, 0, info_size);
 	strcpy(info->name, PyString_AsString(tablename));
-	if (getsockopt(sockfd, IPPROTO_IP,
-				IPT_SO_GET_INFO, info, &info_size) < 0) {
+	if (getsockopt(sockfd, IPPROTO_IP, IPT_SO_GET_INFO,
+				info, &info_size) < 0) {
 		PyErr_SetFromErrno(PyExc_OSError);
 		PyMem_Free(info);
 		goto CLEAR; 
@@ -752,20 +783,23 @@ iptables_replace_table(PyObject *object, PyObject *args)
 		goto CLEAR;
 	}
 	/* initialize context */
+	memset(&context, 0, sizeof(struct replace_context));
 	memcpy(replace->name, PyString_AsString(tablename), PyString_Size(tablename)); 
 	context.replace = replace;	
 	context.info = info;
-	context.current_offset = 0;
-	/* iter over chains */ 
+	context.offset = 0;
+
 	chains_keys = PyDict_Keys(chains_dict);
 	replace->num_entries = PyList_Size(chains_keys); 
-	context.memory_size = replace->num_entries * (sizeof(struct ipt_entry)\
-			+ sizeof(struct xt_entry_target)\
-			+ sizeof(struct xt_entry_match));
+	context.memory_size = replace->num_entries * 
+		(sizeof(struct ipt_entry) +
+		 sizeof(struct xt_entry_target) +
+		 sizeof(struct xt_entry_match));
 	context.memory = PyMem_Malloc(context.memory_size);
 	if (!context.memory) { 
 		goto FREE_CONTEXT;
 	}
+	/* iter over chains */ 
 	PyObject *chains_keys_iter = PyObject_GetIter(chains_keys);
 	if (!chains_keys_iter) { 
 		Py_XDECREF(chains_keys);
@@ -781,7 +815,7 @@ iptables_replace_table(PyObject *object, PyObject *args)
 		PyObject *rule_list = PyDict_GetItem(chains_dict, chains_keys_next); 
 		int chain_ret = compile_chain(&context, chains_keys_next, rule_list); 
 		Py_XDECREF(chains_keys_next); 
-		/* if prepare chain failed */
+		/* if compile chain failed */
 		if (!chain_ret) { 
 			Py_XDECREF(chains_keys_iter); 
 			Py_XDECREF(chains_keys);
@@ -789,7 +823,15 @@ iptables_replace_table(PyObject *object, PyObject *args)
 		}
 		chains_keys_next = PyIter_Next(chains_keys_iter);
 	} 
-	Py_XDECREF(chains_keys);
+	Py_XDECREF(chains_keys); 
+	/* Append error rule at end of table*/
+	error = context.memory;	
+	error->e.target_offset = sizeof(struct ipt_entry);
+	error->e.next_offset = sizeof(struct ipt_entry) +
+		XT_ALIGN(sizeof(struct xt_error_target));
+	strcpy((char *)&error->target.target.u.user.name, XT_ERROR_TARGET);
+	strcpy((char *)&error->target.errorname, "ERROR"); 
+	Py_RETURN_NONE;
 FREE_MEMORY:
 	PyMem_Free(context.memory); 
 FREE_CONTEXT: 
@@ -841,10 +883,11 @@ iptables_get_info(PyObject *object, PyObject *args)
 		goto ERROR; 
 	} 
 	info_dict = PyDict_New();
+	DICT_STORE_STRING(info_dict, "name", info->name);
 	PyDict_SetItemString(info_dict, "name", PyString_FromString(info->name));
-	PyDict_SetItemString(info_dict, "valid_hooks", PyInt_FromLong(info->valid_hooks));
-	PyDict_SetItemString(info_dict, "num_entries", PyInt_FromLong(info->num_entries));
-	PyDict_SetItemString(info_dict, "size", PyInt_FromLong(info->size));
+	DICT_STORE_ULONG(info_dict, "name", info->valid_hooks);
+	DICT_STORE_INT(info_dict, "num_entries", info->num_entries);
+	DICT_STORE_INT(info_dict, "size", info->size); 
 	PyObject *hook_entry_list = PyList_New(0);
 	PyObject *underflow_list = PyList_New(0);
 	int i;
@@ -1004,7 +1047,14 @@ PyMODINIT_FUNC init_iptables(void)
 	OBJECT_ADD_INT(m, "IPT_ICMP_NET_PROHIBITED", IPT_ICMP_NET_PROHIBITED);
 	OBJECT_ADD_INT(m, "IPT_ICMP_HOST_PROHIBITED", IPT_ICMP_HOST_PROHIBITED);
 	OBJECT_ADD_INT(m, "IPT_TCP_RESET", IPT_TCP_RESET);
-	OBJECT_ADD_INT(m, "IPT_ICMP_ADMIN_PROHIBITED", IPT_ICMP_ADMIN_PROHIBITED);
+	OBJECT_ADD_INT(m, "IPT_ICMP_ADMIN_PROHIBITED", IPT_ICMP_ADMIN_PROHIBITED); 
+	OBJECT_ADD_INT(m, "NF_DROP", -NF_DROP - 1);
+	OBJECT_ADD_INT(m, "NF_ACCEPT", -NF_ACCEPT - 1); 
+	OBJECT_ADD_INT(m, "NF_STOLEN", -NF_STOLEN - 1);
+	OBJECT_ADD_INT(m, "NF_QUEUE", -NF_QUEUE - 1);
+	OBJECT_ADD_INT(m, "NF_REPEAT", -NF_REPEAT - 1);
+	OBJECT_ADD_INT(m, "NF_STOP", -NF_STOP - 1); 
+	OBJECT_ADD_INT(m, "XT_RETURN", XT_RETURN);
 #undef OBJECT_ADD_INT
 	} 
 }

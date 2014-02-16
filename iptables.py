@@ -8,6 +8,13 @@ from cStringIO import StringIO
 jump_table = {
         }
 
+verb_dict = {
+        _iptables.NF_ACCEPT: "accept",
+        _iptables.NF_DROP: "drop",
+        _iptables.NF_QUEUE: "queue",
+        _iptables.XT_RETURN: "return"
+        }
+
 protocol_dict = {
         _iptables.IPPROTO_IP: "IP",
         _iptables.IPPROTO_ICMP: "ICMP",
@@ -304,11 +311,7 @@ def is_module_in_kernel(module):
     except Exception as e:
         raise Exception("read /proc/net/ip_tables_names failed")
        
-    if module in modules:
-        return True
-    else:
-        return False
-    
+    return module in modules: 
 
 def load_iptables_module(module): 
     try:
@@ -324,6 +327,7 @@ def load_iptables_module(module):
     pid, reason = os.wait()
     if (reason >> 8):
         raise Exception("failed to load module %s" % module) 
+
 
 def handle_matches(rule_buffer, match_tuple):
     match, value = match_tuple
@@ -449,9 +453,9 @@ def handle_rule(rule_buffer, rule_dict):
                     rule_buffer.write("--prefix \"%s\" " % target_dict["prefix"]) 
     else:
         if rule_dict["target_type"] == "jump":
-            rule_buffer.write("-j %s " % jump_table[rule_dict["verb"]])
+            rule_buffer.write("-j %s " % jump_table[verb_dict[rule_dict["verb"]]])
         elif rule_dict["target_type"] == "standard":
-            rule_buffer.write("-j %s " % rule_dict["verb"])
+            rule_buffer.write("-j %s " % verb_dict[rule_dict["verb"]])
     if "matches" in rule_dict:
         #matches 
         for match_tuple in rule_dict["matches"].items(): 
@@ -471,7 +475,7 @@ def handle_chains(table):
             if rule["target_type"] == "jump":
                jump_table[rule["verb"]] = chain2offset[rule["verb"]] 
     #print table detail
-    print "table: %s" % t["tablename"]
+    print "table: %s" % t["name"]
     print "chains: ", " ".join(t["chains"].keys()) 
     for chain, rules in chains:
         print "============in chain %s" % chain 
