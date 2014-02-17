@@ -554,13 +554,30 @@ ERROR:
 
 
 static int
-compile_target(void **base, PyObject *this_target, unsigned int *offset)
+compile_target(PyObject *rule_dict, void **base, unsigned int *offset)
 {
+	char *target_type = DICT_GET_STRING(rule_dict, "target_type");
+	if (strcmp(target_type, "standard") == 0) { 
+					
+	} else if (strcmp(target_type, "jump") == 0) {
+		/* jump to another chain */
+	} else if (strcmp(target_type, "fallthrough") == 0) {
+	
+	} else if (strcmp(target_type, "module") == 0) {
+		/*target module */
+		char *module_name = DICT_GET_STRING(rule_dict, "target");
+		PyObject *target_dict = PyDict_GetItemString(rule_dict, "target_dict");
+		if (strcmp(module_name, "LOG") == 0) {
+			handle_target_log(target_dict, base, 1);	
+		} else if(strcmp(module_name, "REJECT") == 0) {
+			handle_target_reject(target_dict,  base,  1);	
+		}
+	}
 	return 1;
 }
 
 static int 
-compile_matches(void **base, PyObject *this_match, unsigned int *offset) 
+compile_matches(void **base, PyObject *this_match, unsigned int *match_offset) 
 {
 	/*supress gcc warning*/
 	const char *keystr = NULL;
@@ -573,7 +590,7 @@ compile_matches(void **base, PyObject *this_match, unsigned int *offset)
 	}
 	/*move forward */
 	*base += sizeof(struct xt_entry_match); 
-	*offset += sizeof(struct xt_entry_match);
+	*match_offset += sizeof(struct xt_entry_match);
 	match_entry->u.user.revision = 3; 
 	keystr = PyString_AsString(match_name);
 	if (strcmp(keystr, "tcp") == 0) { 
@@ -581,33 +598,34 @@ compile_matches(void **base, PyObject *this_match, unsigned int *offset)
 		strcpy(match_entry->u.user.name, keystr);
 		match_entry->u.match_size = sizeof(struct xt_tcp);
 		*base += sizeof(struct xt_tcp);
+		*match_offset += sizeof(struct xt_pkttype_info);
 	} else if (strcmp(keystr, "pkttype")) {
 		handle_match_pkttype(match_dict, *base, 1);
 		strcpy(match_entry->u.user.name, keystr);
 		match_entry->u.match_size = sizeof(struct xt_pkttype_info);
 		*base += sizeof(struct xt_pkttype_info);
-		*offset += sizeof(struct xt_pkttype_info);
+		*match_offset += sizeof(struct xt_pkttype_info);
 	}  else if (strcmp(keystr, "conntrack")) {
 		/* conntrack plugin */
 		handle_match_conntrack(match_dict, *base, 1);
 		strcpy(match_entry->u.user.name, keystr);
 		match_entry->u.match_size = sizeof(struct xt_conntrack_mtinfo3);
 		*base += sizeof(struct xt_conntrack_mtinfo3);
-		*offset += sizeof(struct xt_conntrack_mtinfo3);
+		*match_offset += sizeof(struct xt_conntrack_mtinfo3);
 	} else if (strcmp(keystr, "limit")) {
 		/* limit plugin */
 		handle_match_limit(match_dict, *base, 1);	
 		strcpy(match_entry->u.user.name, keystr);
 		match_entry->u.match_size = sizeof(struct xt_rateinfo);
 		*base += sizeof(struct xt_rateinfo);
-		*offset += sizeof(struct xt_rateinfo);
+		*match_offset += sizeof(struct xt_rateinfo);
 	} else if (strcmp(keystr, "icmp")) {
 		/* icmp plugin */
 		handle_match_icmp(match_dict, *base, 1);
 		strcpy(match_entry->u.user.name, keystr);
 		match_entry->u.match_size = sizeof(struct ipt_icmp);
 		*base += sizeof(struct ipt_icmp);
-		*offset += sizeof(struct ipt_icmp);
+		*match_offset += sizeof(struct ipt_icmp);
 	}
 	return 1;
 }
@@ -615,6 +633,7 @@ compile_matches(void **base, PyObject *this_match, unsigned int *offset)
 static int
 compile_rule(PyObject *rule_dict, struct ipt_entry *this_entry, unsigned int *offset)
 { 
+	unsigned match_offset = 0
 	struct xt_entry_match *base = NULL;
 	/*copy ipt_entry */
 	this_entry->ip.src.s_addr = DICT_GET_ULONG(rule_dict, "srcip");
@@ -631,9 +650,7 @@ compile_rule(PyObject *rule_dict, struct ipt_entry *this_entry, unsigned int *of
 	this_entry->ip.proto = DICT_GET_INT(rule_dict, "protocol");	
 	this_entry->ip.flags = DICT_GET_ULONG(rule_dict, "flags");
 	this_entry->ip.invflags = DICT_GET_ULONG(rule_dict, "invflags");
-	this_entry->counters.pcnt = DICT_GET_ULONG(rule_dict, "packets");
-	this_entry->counters.bcnt = DICT_GET_ULONG(rule_dict, "bytes");
-	this_entry->nfcache = DICT_GET_ULONG(rule_dict, "bytes");	
+
 	/*move forward, copy matches */
 	base = (void *)this_entry + sizeof(struct ipt_entry);
 	PyObject *matches_dict = PyDict_GetItemString(rule_dict, "matches");
@@ -641,7 +658,7 @@ compile_rule(PyObject *rule_dict, struct ipt_entry *this_entry, unsigned int *of
 	int ret;
 	PyObject *matches_dict_next = PyIter_Next(matches_dict_iter);
 	while (matches_dict_next) {
-		ret = compile_matches((void **)(&base), matches_dict_next, offset);
+		ret = compile_matches((void **)(&base), matches_dict_next, &match_offset);
 		Py_XDECREF(matches_dict_next);
 		if (!ret) {
 			Py_XDECREF(matches_dict_iter);	
@@ -649,6 +666,15 @@ compile_rule(PyObject *rule_dict, struct ipt_entry *this_entry, unsigned int *of
 		}
 		matches_dict_next = PyIter_Next(matches_dict_iter); 
 	}
+	/* target offset */
+	this_entry->target_offset = match_offset; 
+	/* (standard? jump? fallthrough?), module? */	
+	compile_target(rule_dict, (void **)(&base),  offset);	
+	/* next_offset __align__(struct ipt_entry) */ 
+	unsigned use_align = __align__(struct ipt_entry);
+	unsigned final_offset = use_align - (*offset % use_align);
+	this_entry->next_offset = final_offset;
+	*offset = final_offset;
 	return 1;
 CLEAR:
 	return 0; 
@@ -668,17 +694,21 @@ compile_chain(struct replace_context *context, PyObject *chain_name,  PyObject *
 	/*add chain header */
 	hooknum = is_builtin(PyString_AsString(chain_name));
 	if (hooknum < 0) { 
+		/* user defined chain header */
 		header = context->memory;
 		header->e.target_offset = sizeof(struct ipt_entry); 
 		strcpy(header->name.target.u.user.name, XT_ERROR_TARGET); 
 		header->name.target.u.target_size = 
 			XT_ALIGN(sizeof(struct xt_error_target));
+		/* chain name */
 		strcpy(header->name.errorname, PyString_AsString(chain_name));
 		context->memory += sizeof(struct chain_head); 
 		offset += sizeof(struct chain_head);
 	} else { 
 		/*add hook */
 		context->replace->hook_entry[hooknum] =(unsigned long)context->memory;
+		/* set valid_hooks */
+		context->replace->valid_hooks |= (1 << hooknum)
 		/* add underflow later */	
 	}
 
