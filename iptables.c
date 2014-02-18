@@ -40,10 +40,11 @@
 struct replace_context {
 	struct ipt_replace *replace;
 	struct ipt_getinfo *info;
-	unsigned offset;
-	unsigned last_chain_end;
-	unsigned memory_size;
+	PyObject *jumps;
+	PyObject *chain_offsets;
 	void *memory; 
+	unsigned offset; 
+	unsigned memory_size; 
 };
 
 struct chain_head {
@@ -289,6 +290,12 @@ handle_target_log(PyObject *target_dict, void *target_data, unsigned write)
 		DICT_STORE_ULONG(target_dict, "logflags",
 				loginfo->logflags);
 		DICT_STORE_STRING(target_dict, "prefix", loginfo->prefix); 
+	} else {
+		struct ipt_log_info *loginfo = target_data;
+		loginfo->level = DICT_GET_ULONG(target_dict, "level");
+		loginfo->logflags = DICT_GET_ULONG(target_dict,
+				"logflags");
+		strcpy(loginfo->prefix, DICT_GET_STRING(target_dict, "prefix")); 
 	}
 	return 0;
 
@@ -300,6 +307,9 @@ handle_target_reject(PyObject *target_dict, void *target_data, unsigned write)
 	if (write == 0) {
 		struct ipt_reject_info *rjinfo = target_data;
 		DICT_STORE_ULONG(target_dict, "with", rjinfo->with); 
+	} else {
+		struct ipt_reject_info *rjinfo = target_data;
+		rjinfo->with = DICT_GET_ULONG(target_dict, "with");
 	}
 	return 0;
 }
@@ -554,26 +564,84 @@ ERROR:
 
 
 static int
-compile_target(PyObject *rule_dict, void **base, unsigned int *offset)
-{
+compile_target(struct replace_context *context, PyObject *rule_dict,  void **base, unsigned int *offset)
+{ 
+	if (!(context && rule_dict && base && offset)) {
+		goto TARGET_FAILED;	
+	}
+	unsigned entry_size = sizeof(struct xt_standard_target);
 	char *target_type = DICT_GET_STRING(rule_dict, "target_type");
-	if (strcmp(target_type, "standard") == 0) { 
-					
+	if (strcmp(target_type, "standard") == 0) {
+		struct xt_standard_target *xst = *base;
+		strcpy(xst->target.u.user.name, XT_STANDARD_TARGET);
+		xst->target.u.target_size = entry_size;
+		/* standard action */
+		xst->verdict = DICT_GET_INT(rule_dict, "verb");
+		/* move forward */
+		*offset += entry_size;
+		*base += entry_size;
 	} else if (strcmp(target_type, "jump") == 0) {
-		/* jump to another chain */
+		/* jump to another chain , add this later*/
+		struct xt_standard_target *xst = *base;
+		PyList_Append(context->jumps,
+			PyTuple_Pack(2,
+				PyLong_FromUnsignedLong((unsigned long long)xst),
+				PyDict_GetItemString(rule_dict, "verb")
+				)
+			);
+		strcpy(xst->target.u.user.name, XT_STANDARD_TARGET);
+		xst->target.u.target_size = entry_size;
+		/* target unknown yet */
+		xst->verdict = 0;
+		/* move forward */
+		*offset += entry_size;
+		*base += entry_size;
+		
 	} else if (strcmp(target_type, "fallthrough") == 0) {
-	
+		/* to next rule */
+		struct xt_standard_target *xst  = *base; 
+		strcpy(xst->target.u.user.name, XT_STANDARD_TARGET);
+		xst->target.u.target_size = entry_size;
+		xst->verdict = *offset + entry_size;
+		/* move forward */
+		*offset += entry_size;
+		*base += entry_size;
 	} else if (strcmp(target_type, "module") == 0) {
 		/*target module */
+		unsigned target_pl_size = 0; 
 		char *module_name = DICT_GET_STRING(rule_dict, "target");
 		PyObject *target_dict = PyDict_GetItemString(rule_dict, "target_dict");
-		if (strcmp(module_name, "LOG") == 0) {
-			handle_target_log(target_dict, base, 1);	
-		} else if(strcmp(module_name, "REJECT") == 0) {
-			handle_target_reject(target_dict,  base,  1);	
+		if (target_dict == NULL) {
+			/* unknown target */
+			goto TARGET_FAILED;
 		}
-	}
+		struct xt_entry_target *xet = *base;
+		/* copy target name */ 
+		strcpy(xet->u.user.name, module_name);
+		/* move forawrd */
+		*base += entry_size;
+		*offset += entry_size;
+		if (strcmp(module_name, "LOG") == 0) {
+			/* base + paylaod size */
+			target_pl_size = sizeof(struct ipt_log_info); 
+			handle_target_log(target_dict, *base, 1);	
+
+		} else if(strcmp(module_name, "REJECT") == 0) {
+			target_pl_size = sizeof(struct ipt_reject_info); 
+			handle_target_reject(target_dict,  *base,  1);	
+		} else {
+			goto TARGET_FAILED;
+		}
+		/* move forward */
+		xet->u.target_size = entry_size + target_pl_size; 
+		*offset += target_pl_size;
+		*base += target_pl_size;
+	} else {
+		goto TARGET_FAILED;
+	} 
 	return 1;
+TARGET_FAILED:
+	return 0;
 }
 
 static int 
@@ -581,7 +649,10 @@ compile_matches(void **base, PyObject *this_match, unsigned int *match_offset)
 {
 	/*supress gcc warning*/
 	const char *keystr = NULL;
+	unsigned xt_size = XT_ALIGN(sizeof(struct xt_entry_match));
+	unsigned xt_pl_size = 0;
 	struct xt_entry_match *match_entry = *base; 
+
 	PyObject *match_name = PyTuple_GetItem(this_match, 0);
 	PyObject *match_dict = PyTuple_GetItem(this_match, 1);
 
@@ -589,58 +660,62 @@ compile_matches(void **base, PyObject *this_match, unsigned int *match_offset)
 		return 0;
 	}
 	/*move forward */
-	*base += sizeof(struct xt_entry_match); 
-	*match_offset += sizeof(struct xt_entry_match);
+	*base += xt_size;
+	*match_offset += xt_size;
+	/*which plugin */
 	match_entry->u.user.revision = 3; 
 	keystr = PyString_AsString(match_name);
 	if (strcmp(keystr, "tcp") == 0) { 
+		xt_pl_size = sizeof(struct xt_tcp);
 		handle_match_tcp(match_dict, *base,  1);
-		strcpy(match_entry->u.user.name, keystr);
-		match_entry->u.match_size = sizeof(struct xt_tcp);
-		*base += sizeof(struct xt_tcp);
-		*match_offset += sizeof(struct xt_pkttype_info);
+		strcpy(match_entry->u.user.name, keystr); 
 	} else if (strcmp(keystr, "pkttype")) {
+		xt_pl_size = sizeof(struct xt_pkttype_info);
 		handle_match_pkttype(match_dict, *base, 1);
-		strcpy(match_entry->u.user.name, keystr);
-		match_entry->u.match_size = sizeof(struct xt_pkttype_info);
-		*base += sizeof(struct xt_pkttype_info);
-		*match_offset += sizeof(struct xt_pkttype_info);
+		strcpy(match_entry->u.user.name, keystr); 
+		
 	}  else if (strcmp(keystr, "conntrack")) {
 		/* conntrack plugin */
+		xt_pl_size = sizeof(struct xt_conntrack_mtinfo3);
 		handle_match_conntrack(match_dict, *base, 1);
 		strcpy(match_entry->u.user.name, keystr);
-		match_entry->u.match_size = sizeof(struct xt_conntrack_mtinfo3);
-		*base += sizeof(struct xt_conntrack_mtinfo3);
-		*match_offset += sizeof(struct xt_conntrack_mtinfo3);
+
 	} else if (strcmp(keystr, "limit")) {
 		/* limit plugin */
+		xt_pl_size = sizeof(struct xt_rateinfo);
 		handle_match_limit(match_dict, *base, 1);	
 		strcpy(match_entry->u.user.name, keystr);
-		match_entry->u.match_size = sizeof(struct xt_rateinfo);
-		*base += sizeof(struct xt_rateinfo);
-		*match_offset += sizeof(struct xt_rateinfo);
+
 	} else if (strcmp(keystr, "icmp")) {
 		/* icmp plugin */
+		xt_pl_size = sizeof(struct ipt_icmp);
 		handle_match_icmp(match_dict, *base, 1);
-		strcpy(match_entry->u.user.name, keystr);
-		match_entry->u.match_size = sizeof(struct ipt_icmp);
-		*base += sizeof(struct ipt_icmp);
-		*match_offset += sizeof(struct ipt_icmp);
-	}
-	return 1;
+		strcpy(match_entry->u.user.name, keystr); 
+	} else {
+		/* unknown plugin failed */
+		return 0;
+	} 
+	/* move forward */
+	match_entry->u.match_size = xt_size + xt_pl_size;
+	*base += xt_pl_size;
+	*match_offset += xt_pl_size;
+	return 1; 
 }
 
 static int
-compile_rule(PyObject *rule_dict, struct ipt_entry *this_entry, unsigned int *offset)
+compile_rule(struct replace_context *context, PyObject *rule_dict, struct ipt_entry *this_entry, unsigned int *offset)
 { 
-	unsigned match_offset = 0
+	unsigned match_offset = 0;
 	struct xt_entry_match *base = NULL;
+	if (!(context && rule_dict && this_entry)) {
+		goto CLEAR;
+	}
 	/*copy ipt_entry */
 	this_entry->ip.src.s_addr = DICT_GET_ULONG(rule_dict, "srcip");
 	this_entry->ip.dst.s_addr = DICT_GET_ULONG(rule_dict, "dstip");
 	this_entry->ip.smsk.s_addr = DICT_GET_ULONG(rule_dict, "srcip_mask");
 	this_entry->ip.dmsk.s_addr = DICT_GET_ULONG(rule_dict, "dstip_mask");
-	/*bug char * , unsgined char */
+	/*copy iface and mask*/
 	strcpy(this_entry->ip.iniface, DICT_GET_STRING(rule_dict, "iniface"));
 	strcpy(this_entry->ip.outiface,  DICT_GET_STRING(rule_dict, "outiface"));
 	PyObject *iniface_mask = PyDict_GetItemString(rule_dict, "iniface_mask");
@@ -669,12 +744,11 @@ compile_rule(PyObject *rule_dict, struct ipt_entry *this_entry, unsigned int *of
 	/* target offset */
 	this_entry->target_offset = match_offset; 
 	/* (standard? jump? fallthrough?), module? */	
-	compile_target(rule_dict, (void **)(&base),  offset);	
+	compile_target(context, rule_dict, (void **)(&base),  offset);	
 	/* next_offset __align__(struct ipt_entry) */ 
-	unsigned use_align = __align__(struct ipt_entry);
-	unsigned final_offset = use_align - (*offset % use_align);
-	this_entry->next_offset = final_offset;
-	*offset = final_offset;
+	unsigned use_align = __alignof__(struct ipt_entry); 
+	*offset += use_align - (*offset % use_align);
+	this_entry->next_offset = *offset; 
 	return 1;
 CLEAR:
 	return 0; 
@@ -692,6 +766,9 @@ compile_chain(struct replace_context *context, PyObject *chain_name,  PyObject *
 		goto CLEAR;
 	} 
 	/*add chain header */
+	/*collect chain_offsets*/
+	PyDict_SetItem(context->chain_offsets, chain_name,
+			PyLong_FromUnsignedLong((unsigned long long)context->memory));
 	hooknum = is_builtin(PyString_AsString(chain_name));
 	if (hooknum < 0) { 
 		/* user defined chain header */
@@ -702,13 +779,14 @@ compile_chain(struct replace_context *context, PyObject *chain_name,  PyObject *
 			XT_ALIGN(sizeof(struct xt_error_target));
 		/* chain name */
 		strcpy(header->name.errorname, PyString_AsString(chain_name));
+		/* move forward */
 		context->memory += sizeof(struct chain_head); 
 		offset += sizeof(struct chain_head);
 	} else { 
 		/*add hook */
 		context->replace->hook_entry[hooknum] =(unsigned long)context->memory;
 		/* set valid_hooks */
-		context->replace->valid_hooks |= (1 << hooknum)
+		context->replace->valid_hooks |= (1 << hooknum);
 		/* add underflow later */	
 	}
 
@@ -725,7 +803,7 @@ compile_chain(struct replace_context *context, PyObject *chain_name,  PyObject *
 			Py_XDECREF(rule_list_iter); 
 			goto CLEAR;
 		}
-		int rule_ret = compile_rule(rule_list_next, this_entry, &offset); 
+		int rule_ret = compile_rule(context, rule_list_next, this_entry, &offset); 
 		Py_XDECREF(rule_list_next);
 		if(!rule_ret) {
 			Py_XDECREF(rule_list_iter); 
@@ -775,16 +853,18 @@ iptables_replace_table(PyObject *object, PyObject *args)
 	if (!tablename) {
 		PyErr_SetString(PyExc_KeyError, "no table name in this table dict");
 		goto CLEAR; 
-	}
+	} 
 	if (strlen(PyString_AsString(tablename)) >= XT_TABLE_MAXNAMELEN) { 
 		PyErr_SetString(PyExc_ValueError, "table name too big");
 		goto CLEAR;
 	}
+	/* get chains */
 	chains_dict = PyDict_GetItemString(table_dict, "chains");
 	if (!chains_dict) {
 		PyErr_SetString(PyExc_KeyError, "no chains in table");
 		goto CLEAR;
 	}
+	/* init socket */
 	sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
 	if (sockfd < 0) {
 		PyErr_SetFromErrno(PyExc_OSError);
@@ -807,24 +887,29 @@ iptables_replace_table(PyObject *object, PyObject *args)
 		PyMem_Free(info);
 		goto CLEAR; 
 	} 
+	/* initialize context */
 	replace = PyMem_Malloc(sizeof(struct ipt_replace));
 	if(!replace) {
 		PyMem_Free(info);
 		goto CLEAR;
 	}
-	/* initialize context */
-	memset(&context, 0, sizeof(struct replace_context));
+
+	memset(&context, 0, sizeof(struct replace_context)); 
 	memcpy(replace->name, PyString_AsString(tablename), PyString_Size(tablename)); 
 	context.replace = replace;	
 	context.info = info;
 	context.offset = 0;
+	/* for jump target */
+	context.chain_offsets = PyDict_New();
+	context.jumps = PyList_New(0);
 
 	chains_keys = PyDict_Keys(chains_dict);
 	replace->num_entries = PyList_Size(chains_keys); 
-	context.memory_size = replace->num_entries * 
+	/* allocate buffer*/
+	context.memory_size = 50 * (replace->num_entries * 
 		(sizeof(struct ipt_entry) +
 		 sizeof(struct xt_entry_target) +
-		 sizeof(struct xt_entry_match));
+		 sizeof(struct xt_entry_match)));
 	context.memory = PyMem_Malloc(context.memory_size);
 	if (!context.memory) { 
 		goto FREE_CONTEXT;
@@ -861,6 +946,20 @@ iptables_replace_table(PyObject *object, PyObject *args)
 		XT_ALIGN(sizeof(struct xt_error_target));
 	strcpy((char *)&error->target.target.u.user.name, XT_ERROR_TARGET);
 	strcpy((char *)&error->target.errorname, "ERROR"); 
+	/* fill jumps */
+	PyObject *jumps_iter = PyObject_GetIter(context.jumps);
+	PyObject *jumps_next = PyIter_Next(jumps_iter);
+	while (jumps_next) {
+		struct xt_standard_target *xet = (void *)(PyLong_AsUnsignedLong(PyTuple_GetItem(jumps_next, 0)));
+		PyObject *jump_to = PyDict_GetItem(context.chain_offsets, PyTuple_GetItem(jumps_next, 1)); 
+		Py_XDECREF(jumps_next);	
+		if (!(jump_to && xet)) {
+			Py_XDECREF(jumps_iter);
+			goto FREE_MEMORY;
+		}
+		xet->verdict = PyLong_AsUnsignedLong(jump_to);
+		jumps_next = PyIter_Next(jumps_iter); 
+	}
 	Py_RETURN_NONE;
 FREE_MEMORY:
 	PyMem_Free(context.memory); 
