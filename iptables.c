@@ -1,3 +1,4 @@
+/* iptables lowlevel */
 #include "Python.h" 
 /* user headers common */
 #include <stdio.h>
@@ -708,7 +709,7 @@ compile_rule(struct replace_context *context, PyObject *rule_dict, struct ipt_en
 	unsigned match_offset = 0;
 	struct xt_entry_match *base = NULL;
 	if (!(context && rule_dict && this_entry)) {
-		goto CLEAR;
+		goto SET_ERROR;
 	}
 	/*copy ipt_entry */
 	this_entry->ip.src.s_addr = DICT_GET_ULONG(rule_dict, "srcip");
@@ -737,7 +738,7 @@ compile_rule(struct replace_context *context, PyObject *rule_dict, struct ipt_en
 		Py_XDECREF(matches_dict_next);
 		if (!ret) {
 			Py_XDECREF(matches_dict_iter);	
-			goto CLEAR;
+			goto SET_ERROR;
 		}
 		matches_dict_next = PyIter_Next(matches_dict_iter); 
 	}
@@ -750,7 +751,7 @@ compile_rule(struct replace_context *context, PyObject *rule_dict, struct ipt_en
 	*offset += use_align - (*offset % use_align);
 	this_entry->next_offset = *offset; 
 	return 1;
-CLEAR:
+SET_ERROR:
 	return 0; 
 }
 
@@ -763,7 +764,7 @@ compile_chain(struct replace_context *context, PyObject *chain_name,  PyObject *
 	struct chain_head *header = NULL; 
 
 	if (!(context && chain_name && rule_list)) {
-		goto CLEAR;
+		goto SET_ERROR;
 	} 
 	/*add chain header */
 	/*collect chain_offsets*/
@@ -792,7 +793,7 @@ compile_chain(struct replace_context *context, PyObject *chain_name,  PyObject *
 
 	PyObject *rule_list_iter = PyObject_GetIter(rule_list); 
 	if (!rule_list_iter) {
-		goto CLEAR;
+		goto SET_ERROR;
 	}
 
 	PyObject *rule_list_next = PyIter_Next(rule_list_iter);
@@ -801,13 +802,13 @@ compile_chain(struct replace_context *context, PyObject *chain_name,  PyObject *
 		struct ipt_entry *this_entry = context->memory;
 		if(!this_entry) {
 			Py_XDECREF(rule_list_iter); 
-			goto CLEAR;
+			goto SET_ERROR;
 		}
 		int rule_ret = compile_rule(context, rule_list_next, this_entry, &offset); 
 		Py_XDECREF(rule_list_next);
 		if(!rule_ret) {
 			Py_XDECREF(rule_list_iter); 
-			goto CLEAR;
+			goto SET_ERROR;
 		} 
 		/* move forward */
 		context->memory += offset;
@@ -818,8 +819,10 @@ compile_chain(struct replace_context *context, PyObject *chain_name,  PyObject *
 		/* add underflow */
 		context->replace->underflow[hooknum] = (unsigned long)context->memory; 
 	} 
+	/* update blob size */
+	context->replace->size += offset;
 	return 1;
-CLEAR:	
+SET_ERROR:	
 	if (!PyErr_Occurred()) {
 		PyErr_SetString(PyExc_OSError, "iptables runtime error");
 	}
@@ -827,6 +830,7 @@ CLEAR:
 }
 
 PyDoc_STRVAR(iptables_replace_table_doc, "replace this table in kernel");
+
 
 static PyObject *
 iptables_replace_table(PyObject *object, PyObject *args)
@@ -838,7 +842,6 @@ iptables_replace_table(PyObject *object, PyObject *args)
 	PyObject *chains_keys = NULL; 
 	PyObject *tablename = NULL;
 
-	//struct xt_counters_info *counter_info = NULL; 
 	struct ipt_getinfo *info = NULL;
 	struct ipt_replace *replace = NULL;
 	struct chain_error *error = NULL;
@@ -852,32 +855,32 @@ iptables_replace_table(PyObject *object, PyObject *args)
 	tablename = PyDict_GetItemString(table_dict, "name");
 	if (!tablename) {
 		PyErr_SetString(PyExc_KeyError, "no table name in this table dict");
-		goto CLEAR; 
+		goto SET_ERROR; 
 	} 
 	if (strlen(PyString_AsString(tablename)) >= XT_TABLE_MAXNAMELEN) { 
 		PyErr_SetString(PyExc_ValueError, "table name too big");
-		goto CLEAR;
+		goto SET_ERROR;
 	}
 	/* get chains */
 	chains_dict = PyDict_GetItemString(table_dict, "chains");
 	if (!chains_dict) {
 		PyErr_SetString(PyExc_KeyError, "no chains in table");
-		goto CLEAR;
+		goto SET_ERROR;
 	}
 	/* init socket */
 	sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
 	if (sockfd < 0) {
 		PyErr_SetFromErrno(PyExc_OSError);
-		goto CLEAR;
+		goto SET_ERROR;
 	}
 	if (fcntl(sockfd, F_SETFD, FD_CLOEXEC) == -1) {
 		PyErr_SetFromErrno(PyExc_OSError);
-		goto CLEAR;
+		goto SET_ERROR;
 	}
 	/* set ipt_info */
 	info = PyMem_Malloc(sizeof(struct ipt_getinfo)); 
 	if (!info)
-		goto CLEAR; 
+		goto SET_ERROR; 
 	info_size = sizeof(struct ipt_getinfo);
 	memset(info, 0, info_size);
 	strcpy(info->name, PyString_AsString(tablename));
@@ -885,17 +888,20 @@ iptables_replace_table(PyObject *object, PyObject *args)
 				info, &info_size) < 0) {
 		PyErr_SetFromErrno(PyExc_OSError);
 		PyMem_Free(info);
-		goto CLEAR; 
+		goto SET_ERROR; 
 	} 
 	/* initialize context */
 	replace = PyMem_Malloc(sizeof(struct ipt_replace));
 	if(!replace) {
 		PyMem_Free(info);
-		goto CLEAR;
+		goto SET_ERROR;
 	}
 
 	memset(&context, 0, sizeof(struct replace_context)); 
 	memcpy(replace->name, PyString_AsString(tablename), PyString_Size(tablename)); 
+	/* for old counters from kernel */	
+	replace->num_counters = info->num_entries;
+	replace->counters = PyMem_Malloc(info->num_entries * sizeof(struct xt_counters));
 	context.replace = replace;	
 	context.info = info;
 	context.offset = 0;
@@ -904,9 +910,10 @@ iptables_replace_table(PyObject *object, PyObject *args)
 	context.jumps = PyList_New(0);
 
 	chains_keys = PyDict_Keys(chains_dict);
+	/* how many entires */
 	replace->num_entries = PyList_Size(chains_keys); 
-	/* allocate buffer*/
-	context.memory_size = 50 * (replace->num_entries * 
+	/* lazy, allocate buffer once*/
+	context.memory_size = 20 * (replace->num_entries * 
 		(sizeof(struct ipt_entry) +
 		 sizeof(struct xt_entry_target) +
 		 sizeof(struct xt_entry_match)));
@@ -960,13 +967,26 @@ iptables_replace_table(PyObject *object, PyObject *args)
 		xet->verdict = PyLong_AsUnsignedLong(jump_to);
 		jumps_next = PyIter_Next(jumps_iter); 
 	}
+	Py_XDECREF(jumps_iter);
+	/* table blob size */
+	replace->size = context->offset;
+	/* finally, send table blob to kernel */ 
+	int ret = setsockopt(sockfd, IPPROTO_IP, IPT_SO_SET_REPLACE, replace, sizeof(struct ipt_replace) + replace->size);
+	if (ret < 0) {
+		PyErr_SetFromErrno(PyExc_OSError);
+		goto FREE_MEMORY;
+	} 
+	/* put counter back */
+	
 	Py_RETURN_NONE;
 FREE_MEMORY:
 	PyMem_Free(context.memory); 
 FREE_CONTEXT: 
+	/* free counters */
+	PyMem_Free(replace->counters);
 	PyMem_Free(info);
 	PyMem_Free(replace);
-CLEAR:
+SET_ERROR:
 	if (!PyErr_Occurred()) {
 		PyErr_SetString(PyExc_OSError, "iptables runtime error");
 	}
