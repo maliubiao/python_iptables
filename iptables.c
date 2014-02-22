@@ -38,15 +38,15 @@
 #define DICT_STORE_STRING(x, y, z) PyDict_SetItemString(x, y, PyString_FromString(z))
 
 
-struct replace_context {
-	struct ipt_replace *replace;
-	struct ipt_getinfo *info;
+struct replace_context { 
 	PyObject *jumps;
-	PyObject *chain_offsets;
-	void *memory; 
+	PyObject *chain_offsets; 
 	unsigned offset; 
 	socklen_t sockfd;
 	unsigned memory_size; 
+	void *memory; 
+	struct ipt_getinfo info;
+	struct ipt_replace replace[0]; 
 };
 
 struct chain_head {
@@ -760,12 +760,14 @@ static int
 compile_chain(struct replace_context *context, PyObject *chain_name,  PyObject *rule_list)
 { 
 	int hooknum = 0; 
-	unsigned int offset = 0;
+	unsigned int offset = 0; 
 	struct chain_head *header = NULL; 
 
 	if (!(context && chain_name && rule_list)) {
 		goto SET_ERROR;
 	} 
+
+	struct ipt_replace *replace = &context->replace[0];
 	/*add chain header */
 	/*collect chain_offsets*/
 	PyDict_SetItem(context->chain_offsets, chain_name,
@@ -785,9 +787,9 @@ compile_chain(struct replace_context *context, PyObject *chain_name,  PyObject *
 		offset += sizeof(struct chain_head);
 	} else { 
 		/*add hook */
-		context->replace->hook_entry[hooknum] =(unsigned long)context->memory;
+		replace->hook_entry[hooknum] =(unsigned long)context->memory;
 		/* set valid_hooks */
-		context->replace->valid_hooks |= (1 << hooknum);
+		replace->valid_hooks |= (1 << hooknum);
 		/* add underflow later */	
 	}
 
@@ -817,10 +819,10 @@ compile_chain(struct replace_context *context, PyObject *chain_name,  PyObject *
 
 	if (hooknum > 0) {
 		/* add underflow */
-		context->replace->underflow[hooknum] = (unsigned long)context->memory; 
+		replace->underflow[hooknum] = (unsigned long)context->memory; 
 	} 
 	/* update blob size */
-	context->replace->size += offset;
+	replace->size += offset;
 	return 1;
 SET_ERROR:	
 	if (!PyErr_Occurred()) {
@@ -835,17 +837,13 @@ context_set_info(struct replace_context *context, PyObject *tablename)
 	unsigned info_size = 0;
 	if (!(context && tablename))
 		goto SET_ERROR; 
-	/* set ipt_info */
-	context->info = PyMem_Malloc(sizeof(struct ipt_getinfo)); 
-	if (!context->info)
-		goto SET_ERROR; 
-	info_size = sizeof(struct ipt_getinfo);
-	memset(context->info, 0, info_size);
-	strcpy(context->info->name, PyString_AsString(tablename));
+	/* set ipt_info */ 
+	info_size = sizeof(struct ipt_getinfo); 
+	strcpy(context->info.name, PyString_AsString(tablename));
 	if (getsockopt(context->sockfd, IPPROTO_IP, IPT_SO_GET_INFO,
-				context->info, &info_size) < 0) {
+				&context->info, &info_size) < 0) {
 		PyErr_SetFromErrno(PyExc_OSError);
-		PyMem_Free(context->info);
+		
 		goto SET_ERROR; 
 	} 
 	return 0;
@@ -884,9 +882,7 @@ compile_table(struct replace_context *context, PyObject *chains_dict)
 	PyObject *rule_list;
 
 
-	chains_keys = PyDict_Keys(chains_dict);
-	/* how many entires */
-	context->replace->num_entries = PyList_Size(chains_keys); 
+	chains_keys = PyDict_Keys(chains_dict); 
 	/* iter over chains */ 
 	chains_keys_iter = PyObject_GetIter(chains_keys);
 	if (!chains_keys_iter) { 
@@ -911,6 +907,7 @@ compile_table(struct replace_context *context, PyObject *chains_dict)
 		}
 		chains_keys_next = PyIter_Next(chains_keys_iter);
 	} 
+	Py_XDECREF(chains_keys_iter);
 	Py_XDECREF(chains_keys); 
 	return 0;
 SET_ERROR:	
@@ -957,12 +954,13 @@ iptables_replace_table(PyObject *object, PyObject *args)
 	int sockfd = 0; 
 	PyObject *table_dict = NULL;
 	PyObject *chains_dict = NULL; 
+	PyObject *chains_keys = NULL;
 	PyObject *tablename = NULL;
 
 	struct ipt_getinfo *info = NULL;
 	struct ipt_replace *replace = NULL;
 	struct chain_error *error = NULL;
-	struct replace_context context; 
+	struct replace_context *context; 
 
 	if (!PyArg_ParseTuple(args, "O|replace_table", &table_dict)) {
 		return NULL;
@@ -985,77 +983,79 @@ iptables_replace_table(PyObject *object, PyObject *args)
 		goto SET_ERROR;
 	}
 
-	context.sockfd = sockfd;
 	if (fcntl(sockfd, F_SETFD, FD_CLOEXEC) == -1) {
 		PyErr_SetFromErrno(PyExc_OSError);
 		goto SET_ERROR;
 	}
 
-	if (context_set_info(&context, tablename) < 0) {
-		goto SET_ERROR;
-	}
-
-	strcpy(context.info->name, PyString_AsString(tablename));
 	/* initialize context */
-	replace = PyMem_Malloc(sizeof(struct ipt_replace));
-	if(!replace) {
-		PyMem_Free(info);
-		goto SET_ERROR;
+	chains_keys = PyDict_Keys(chains_dict); 
+	/* how many entires */ 
+	unsigned allocated = PyList_Size(chains_keys) * 
+		(sizeof(struct ipt_entry) +
+		 20 * sizeof(struct xt_entry_target) +
+		 20 * sizeof(struct xt_entry_match));
+	Py_XDECREF(chains_keys);
+	/* lazy, allocate buffer*/
+	context = PyMem_Malloc(sizeof(struct replace_context) + allocated);
+	memset(context, 0, sizeof(struct replace_context) + allocated);
+	if (!context) { 
+		goto FREE_CONTEXT;
 	}
+	context->memory = (void *)context + sizeof(struct replace_context); 
+	context->memory_size = allocated;
+	context->offset = 0;
+	context->sockfd = sockfd; 
 
-	memset(&context, 0, sizeof(struct replace_context)); 
+	if (context_set_info(context, tablename) < 0) {
+		goto SET_ERROR;
+	} 
+
+	replace = &context->replace[0];
+	info = &context->info;
+
 	memcpy(replace->name, PyString_AsString(tablename), PyString_Size(tablename)); 
 	/* for old counters from kernel */	
 	replace->num_counters = info->num_entries;
-	replace->counters = PyMem_Malloc(info->num_entries * sizeof(struct xt_counters));
-	context.replace = replace;	
-	context.info = info;
-	context.offset = 0;
-	/* for jump target */
-	context.chain_offsets = PyDict_New();
-	context.jumps = PyList_New(0);
-
-
-	/* lazy, allocate buffer once*/
-	context.memory_size = 20 * (replace->num_entries * 
-		(sizeof(struct ipt_entry) +
-		 sizeof(struct xt_entry_target) +
-		 sizeof(struct xt_entry_match)));
-	context.memory = PyMem_Malloc(context.memory_size);
-	if (!context.memory) { 
-		goto FREE_CONTEXT;
-	}
-	if (compile_table(&context, chains_dict) < 0) {
+	replace->counters = PyMem_Malloc(info->num_entries * sizeof(struct xt_counters)); 
+	if (!replace->counters) {
 		goto FREE_MEMORY;
+	}
+	/* for jump target */
+	context->chain_offsets = PyDict_New();
+	context->jumps = PyList_New(0);
+
+	if (compile_table(context, chains_dict) < 0) {
+		goto FREE_CONTEXT;
 	}	
 	/* Append error rule at end of table*/
-	error = context.memory;	
+	error = context->memory;	
 	error->e.target_offset = sizeof(struct ipt_entry);
 	error->e.next_offset = sizeof(struct ipt_entry) +
 		XT_ALIGN(sizeof(struct xt_error_target));
 	strcpy((char *)&error->target.target.u.user.name, XT_ERROR_TARGET);
 	strcpy((char *)&error->target.errorname, "ERROR"); 
 
-	if (fill_jumps(&context) < 0) {
-		goto FREE_MEMORY;
+	if (fill_jumps(context) < 0) {
+		goto FREE_CONTEXT;
 	}
 	/* table blob size */
-	replace->size = context.offset;
+	replace->size = context->offset;
 	/* finally, send table blob to kernel */ 
 	int ret = setsockopt(sockfd, IPPROTO_IP, IPT_SO_SET_REPLACE, replace, sizeof(struct ipt_replace) + replace->size);
 	if (ret < 0) {
 		PyErr_SetFromErrno(PyExc_OSError);
-		goto FREE_MEMORY;
+		goto FREE_CONTEXT;
 	} 
 	/* put counter back */
 	
 	Py_RETURN_NONE;
-FREE_MEMORY:
-	PyMem_Free(context.memory); 
+
 FREE_CONTEXT: 
 	/* free counters */
 	PyMem_Free(replace->counters); 
-	PyMem_Free(replace);
+FREE_MEMORY:
+	PyMem_Free(context); 
 SET_ERROR:
 	close(sockfd);
 	if (!PyErr_Occurred()) {
@@ -1079,6 +1079,7 @@ iptables_get_info(PyObject *object, PyObject *args)
 		return NULL;
 	} 
 	if (strlen(tablename) >= XT_TABLE_MAXNAMELEN) { 
+		PyErr_SetString(PyExc_ValueError, "table name too big"); 
 		return NULL;
 	}
 
