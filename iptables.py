@@ -311,7 +311,7 @@ def is_module_in_kernel(module):
     except Exception as e:
         raise Exception("read /proc/net/ip_tables_names failed")
        
-    return module in modules: 
+    return module in modules
 
 def load_iptables_module(module): 
     try:
@@ -484,6 +484,9 @@ def handle_chains(table):
             handle_rule(rule_buffer, rule_dict)                      
             print rule_buffer.getvalue()
             rule_buffer.close() 
+
+def replace_table(table, table_dict):
+    pass
 
 if __name__ == "__main__": 
     if len(sys.argv) < 3:
