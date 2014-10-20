@@ -38,12 +38,12 @@
 
 
 struct replace_context { 
-	PyObject *jumps;
-	PyObject *chain_offsets; 
-	unsigned offset; 
 	socklen_t sockfd;
+	unsigned offset; 
 	unsigned memory_size; 
 	void *memory; 
+	PyObject *jumps;
+	PyObject *chain_offsets; 
 	struct ipt_getinfo info;
 	struct ipt_replace replace[0]; 
 };

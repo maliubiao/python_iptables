@@ -1,8 +1,8 @@
 #! /usr/bin/env python
 from distutils.core import setup, Extension
 
-m = Extension('_iptables',
-        sources = ['iptables.c'] 
+m = Extension('_sockopt',
+        sources = ['sockopt.c'] 
         )
 
 

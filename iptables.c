@@ -2,7 +2,6 @@
 #include "Python.h" 
 #include "iptables.h"
 
-
 #define XTABLES_VERSION "9" 
 
 static const char *hooknames[] = {
@@ -12,7 +11,6 @@ static const char *hooknames[] = {
 	[NF_IP_LOCAL_OUT]	= "OUTPUT",
 	[NF_IP_POST_ROUTING]	= "POSTROUTING",
 };
-
 
 static int
 is_builtin(char *chain_name)
@@ -207,6 +205,7 @@ handle_match_limit(PyObject *match_dict, void *data, unsigned write)
 	return 0;
 } 
 
+
 static int 
 handle_match_icmp(PyObject *match_dict, void *data, unsigned write)
 {
@@ -225,6 +224,7 @@ handle_match_icmp(PyObject *match_dict, void *data, unsigned write)
 	}
 	return 0;
 }
+
 
 static int
 handle_target_log(PyObject *target_dict, void *target_data, unsigned write)
@@ -808,7 +808,7 @@ check_table_name(PyObject *tablename)
 		goto SET_ERROR; 
 	} 
 	if (strlen(PyString_AsString(tablename)) >= XT_TABLE_MAXNAMELEN) { 
-		PyErr_SetString(PyExc_ValueError, "table name too big");
+		PyErr_SetString(PyExc_ValueError, "table name insanely long");
 		goto SET_ERROR;
 	}
 	return 0;
@@ -889,7 +889,7 @@ SET_ERROR:
 
 }
 
-PyDoc_STRVAR(iptables_replace_table_doc, "replace this table in kernel"); 
+PyDoc_STRVAR(iptables_replace_table_doc, "replace this table"); 
 
 static PyObject *
 iptables_replace_table(PyObject *object, PyObject *args)
@@ -943,7 +943,7 @@ iptables_replace_table(PyObject *object, PyObject *args)
 	context = PyMem_Malloc(sizeof(struct replace_context) + allocated);
 	memset(context, 0, sizeof(struct replace_context) + allocated);
 	if (!context) { 
-		goto FREE_CONTEXT;
+		goto FREE_COUNTER;
 	}
 	context->memory = (void *)context + sizeof(struct replace_context); 
 	context->memory_size = allocated;
@@ -962,14 +962,14 @@ iptables_replace_table(PyObject *object, PyObject *args)
 	replace->num_counters = info->num_entries;
 	replace->counters = PyMem_Malloc(info->num_entries * sizeof(struct xt_counters)); 
 	if (!replace->counters) {
-		goto FREE_MEMORY;
+		goto FREE_CONTENT;
 	}
 	/* for jump target */
 	context->chain_offsets = PyDict_New();
 	context->jumps = PyList_New(0);
 
 	if (compile_table(context, chains_dict) < 0) {
-		goto FREE_CONTEXT;
+		goto FREE_COUNTER;
 	}	
 	/* Append error rule at end of table*/
 	error = context->memory;	
@@ -980,7 +980,7 @@ iptables_replace_table(PyObject *object, PyObject *args)
 	strcpy((char *)&error->target.errorname, "ERROR"); 
 
 	if (fill_jumps(context) < 0) {
-		goto FREE_CONTEXT;
+		goto FREE_COUNTER;
 	}
 	/* table blob size */
 	replace->size = context->offset;
@@ -988,16 +988,15 @@ iptables_replace_table(PyObject *object, PyObject *args)
 	int ret = setsockopt(sockfd, IPPROTO_IP, IPT_SO_SET_REPLACE, replace, sizeof(struct ipt_replace) + replace->size);
 	if (ret < 0) {
 		PyErr_SetFromErrno(PyExc_OSError);
-		goto FREE_CONTEXT;
+		goto FREE_COUNTER;
 	} 
-	/* put counter back */
-	
+	/* put counter back */ 
 	Py_RETURN_NONE;
 
-FREE_CONTEXT: 
+FREE_COUNTER: 
 	/* free counters */
 	PyMem_Free(replace->counters); 
-FREE_MEMORY:
+FREE_CONTENT:
 	PyMem_Free(context); 
 SET_ERROR:
 	close(sockfd);
@@ -1007,7 +1006,9 @@ SET_ERROR:
 	return NULL; 
 }
 
+
 PyDoc_STRVAR(iptables_get_info_doc, "get table information: hooks underflow location, num_entries");
+
 
 static PyObject *
 iptables_get_info(PyObject *object, PyObject *args)
@@ -1022,10 +1023,9 @@ iptables_get_info(PyObject *object, PyObject *args)
 		return NULL;
 	} 
 	if (strlen(tablename) >= XT_TABLE_MAXNAMELEN) { 
-		PyErr_SetString(PyExc_ValueError, "table name too big"); 
+		PyErr_SetString(PyExc_ValueError, "insanely long table name"); 
 		return NULL;
-	}
-
+	} 
 	sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
 	if (sockfd < 0) {
 		PyErr_SetFromErrno(PyExc_OSError);
@@ -1088,6 +1088,7 @@ static PyMethodDef iptables_methods[] = {
 		METH_VARARGS, iptables_replace_table_doc},
 	{NULL, NULL, 0, NULL}
 };
+
 
 PyMODINIT_FUNC init_iptables(void)
 {
