@@ -1,0 +1,3 @@
+probe module("ip_tables").function("get_entries") {
+	printf("get_entries\n")
+}

@@ -5,10 +5,13 @@ import socket
 import struct
 import cStringIO
 import pdb
+import io
+import mmap
 import pprint
 
 TABLE_MAXNAMELEN = 32 
 IFNAMSIZ = 16
+XT_EXTENSION_MAXNAMELEN = 29
 
 #内置的chain, 也叫hook
 PRE_ROUTING = 0
@@ -70,20 +73,28 @@ def new_get_entries(d):
     if len(name) > TABLE_MAXNAMELEN:
         raise ValueError("max table name length: %d" % TABLE_MAXNAMELEN);
     buf.append(name)
+    buf.append((TABLE_MAXNAMELEN - len(name)) * "\x00")
     buf.append(struct.pack("I", d["size"]))
-    buf.append(d["payload"])
+    buf.append(d["entries"])
+    #padding for struct ipt_entry entrytable[0]
+    buf.append(4 * "\x00")
     return "".join(buf)
 
 
-def parse_get_entries(b):
+def parse_get_entries(b, mlen): 
     name = b.read(TABLE_MAXNAMELEN).strip("\x00")
     size = struct.unpack("I", b.read(4))[0]
-    payload = b.read()
+    #skip padding
+    b.seek(4, io.SEEK_CUR)
+    entries = []
+    while b.tell() < mlen:
+        entries.append(parse_entry(b)) 
     return {
             "name": name,
             "size": size,
-            "payload": payload
+            "entries": entries
             } 
+
 
 def new_ip(d):
     buf = []
@@ -146,11 +157,71 @@ def parse_ip(b):
             } 
 
 def new_entry(d):
-    pass
+    buf = []
+    buf.append(new_ip(d["ip"]))
+    buf.append(struct.pack("IHHIQQ", d["nfcache"], 
+        d["target_offset"], d["next_offset"], d["comefrom"],
+        d["pcnt"], d["bcnt"])) 
+    return "".join(buf)
+            
+
+def parse_entry(b): 
+    start = b.tell()
+    ip = parse_ip(b)
+    nfcache, target_offset, next_offset, comefrom = struct.unpack("IHHI", b.read(12))
+    pcnt, bcnt = struct.unpack("QQ", b.read(16)) 
+    ipt_len = b.tell() - start 
+    data = b.read(target_offset - ipt_len) 
+    matches = parse_matches(cStringIO.StringIO(data), len(data))
+    data = b.read(next_offset - target_offset) 
+    target = parse_target(cStringIO.StringIO(data))
+    return {
+            "ip": ip,
+            "nfcache": nfcache,
+            "target_offset": target_offset,
+            "next_offset": next_offset,
+            "comefrom": comefrom,
+            "pcnt": pcnt,
+            "bcnt": bcnt,
+            "offset": start,
+            "matches": matches,
+            "target": target
+            } 
 
 
-def parse_entry(b):
-    pass
+def parse_matches(b, mlen):
+    matches = [] 
+    while b.tell() < mlen: 
+        match_size = struct.unpack("H", b.read(2))[0]
+        if not match_size:
+            break
+        name = b.read(XT_EXTENSION_MAXNAMELEN).strip("\x00") 
+        revision = struct.unpack("B", b.read(1))[0] 
+        match = b.read(match_size)
+        matches.append({
+                "size": match_size,
+                "match": match,
+                "revision": revision,
+                "name": name
+                }) 
+    return matches
+
+
+def parse_target(b):
+    target_size = struct.unpack("H", b.read(2))[0]
+    name = b.read(XT_EXTENSION_MAXNAMELEN).strip("\x00")
+    revision = struct.unpack("B", b.read(1))[0]
+    target = b.read(target_size)
+    return {
+            "size": target_size,
+            "name": name,
+            "revision": revision,
+            "target": target
+            }
+
+def parse_chains(info, entries): 
+    chains = {}
+
 
 
 def test_get_info():
@@ -167,3 +238,30 @@ def test_get_info():
                 }) 
     _sockopt.get(fd, socket.IPPROTO_IP, GET_INFO, data) 
     pprint.pprint(parse_get_info(cStringIO.StringIO(data))) 
+
+
+def test_get_entries(): 
+    sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW)
+    fd = sock.fileno() 
+    data = new_get_info(
+            {
+                "name": "filter", 
+                "valid_hooks": 0,
+                "hook_entry": (0,) * NUMHOOKS,
+                "underflow": (0, ) * NUMHOOKS,
+                "num_entries": 0,
+                "size": 0 
+                }) 
+    _sockopt.get(fd, socket.IPPROTO_IP, GET_INFO, data) 
+    info = parse_get_info(cStringIO.StringIO(data)) 
+    data = new_get_entries(
+            {
+                "name": "filter",
+                "size": info["size"],
+                "entries": info["size"] * "\x00"
+            }) 
+    _sockopt.get(fd, socket.IPPROTO_IP, GET_ENTRIES, data) 
+    entries = parse_get_entries(cStringIO.StringIO(data), len(data)) 
+    pprint.pprint(entries)
+
+test_get_entries()
