@@ -21,6 +21,14 @@ LOCAL_OUT = 3
 POST_ROUTING = 4
 NUMHOOKS = 5
 
+blt_chain_table = {
+    PRE_ROUTING: "prerouting",
+    LOCAL_IN: "input",
+    FORWARD: "forward",
+    LOCAL_OUT: "output",
+    POST_ROUTING: "postrouting"
+        }
+
 #控制选项
 BASE_CTL = 64
 SET_REPLACE = BASE_CTL
@@ -195,7 +203,7 @@ def parse_matches(b, mlen):
         match_size = struct.unpack("H", b.read(2))[0]
         if not match_size:
             break
-        name = b.read(XT_EXTENSION_MAXNAMELEN).strip("\x00") 
+        name = b.read(XT_EXTENSION_MAXNAMELEN)
         revision = struct.unpack("B", b.read(1))[0] 
         match = b.read(match_size)
         matches.append({
@@ -209,7 +217,7 @@ def parse_matches(b, mlen):
 
 def parse_target(b):
     target_size = struct.unpack("H", b.read(2))[0]
-    name = b.read(XT_EXTENSION_MAXNAMELEN).strip("\x00")
+    name = b.read(XT_EXTENSION_MAXNAMELEN)
     revision = struct.unpack("B", b.read(1))[0]
     target = b.read(target_size)
     return {
@@ -219,9 +227,78 @@ def parse_target(b):
             "target": target
             }
 
+
+def parse_standard_target(b):
+    pass
+
+
+def new_standard_target(d):
+    pass
+
+
+match_plugin = {
+
+        }
+
+
+def parse_match_conntrack(b):
+    pass
+
+target_plugin = {
+        "conntrack": parse_match_conntrack
+        }
+
+#A -> B,  default, generator, parser
+
 def parse_chains(info, entries): 
     chains = {}
-
+    offsetd = {}
+    bltchain = {} 
+    for i in entries:
+        #fix offset
+        i["offset"] -= 40
+        matches = i["matches"]
+        for j in matches: 
+            off = j["name"].find("\x00")
+            #blt chain
+            if off < 0:
+                continue
+            match = j["name"][:off]
+            #parse match
+            parser = match_plugin[match]
+            matches[j] = parser(cStringIO.StringIO(j["match"])) 
+        offsetd[i["offset"]] = i 
+    #blt chain table
+    for i, v in enumerate(info["hook_entry"]):
+        if v in offsetd:
+            bltchain[v] = blt_chain_table[i]
+    #built chains
+    #target的判定, target是ERROR则用户定义的chain
+    #target的name为空则是标准target, 要看verdict, unsigned int
+    #verdict如果可能直接指向下一个则是fallthrough, 如果小于0则是标准的, 其它则是jump
+    #target有名则是扩展
+    for i in entries:
+        target = i["target"]
+        name = target["target"]
+        if i["offset"] in bltchain:
+            newchain = []
+            chains[bltchain[i["offset"]]] = newchain
+        elif name.startswith("ERROR"):
+            newchain = [] 
+            chains[name[:name.find("\x00")]] = newchain
+        else:
+            newchain.append(i) 
+        if name[0] == "\x00":
+            verdict = struct.unpack("i", target[:4])[0]
+            if verdict < 0:
+                pass
+            elif verdict == d["offset"] + d["next_offset"]:
+                pass
+            else:
+                pass #jump
+        else:         
+            #plugin 
+            pass 
 
 
 def test_get_info():
@@ -262,6 +339,7 @@ def test_get_entries():
             }) 
     _sockopt.get(fd, socket.IPPROTO_IP, GET_ENTRIES, data) 
     entries = parse_get_entries(cStringIO.StringIO(data), len(data)) 
+    parse_chains(info, entries["entries"])
     pprint.pprint(entries)
 
 test_get_entries()
