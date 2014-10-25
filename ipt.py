@@ -22,11 +22,11 @@ POST_ROUTING = 4
 NUMHOOKS = 5
 
 blt_chain_table = {
-    PRE_ROUTING: "prerouting",
-    LOCAL_IN: "input",
-    FORWARD: "forward",
-    LOCAL_OUT: "output",
-    POST_ROUTING: "postrouting"
+        PRE_ROUTING: "prerouting",
+        LOCAL_IN: "input",
+        FORWARD: "forward",
+        LOCAL_OUT: "output",
+        POST_ROUTING: "postrouting"
         }
 
 #控制选项
@@ -228,77 +228,210 @@ def parse_target(b):
             }
 
 
-def parse_standard_target(b):
+NET_UNREACHABLE = 0
+HOST_UNREACHABLE = 1
+PROT_UNREACHABLE = 2
+PORT_UNREACHABLE = 3
+ECHOREPLY = 4
+NET_PROHIBITED = 5
+HOST_PROHIBITED = 6
+TCP_RESET = 7
+ADMIN_PROHIBITED = 8 
+
+
+#Log TCP sequence numbers
+LOG_TCPSEQ = 0x01
+#Log TCP options
+LOG_TCPOPT = 0x02
+#Log IP options
+LOG_IPOPT = 0x04
+#Log UID owning local socket
+LOG_UID = 0x08
+#Unsupported, don't reuse
+LOG_NFLOG = 0x10
+#Decode MAC header
+LOG_MACDECODE = 0x20
+
+
+def parse_target_reject(b):
+    return {
+            "reject_with": struct.unpack("I", b.read(4))[0]
+            }
+
+def generate_target_reject(d):
     pass
 
 
-def new_standard_target(d):
+def parse_target_log(b):
+    level, logflags = struct.unpack("BB", b.read(2))
+    prefix = b.read(30)
+    i = prefix.find("\x00")
+    if i > 0:
+        prefix = prefix[:i]        
+    return {
+            "level": level,
+            "logflags": logflags,
+            "prefix": prefix
+            }
+   
+
+def generate_target_log(d):
+    pass
+
+
+target_plugin = {
+        "reject": (parse_target_reject, generate_target_reject), 
+        "log": (parse_target_log, generate_target_log)
+        }
+
+
+def read_addr6(b):
+    return struct.unpack("IIII", b.read(16))
+
+
+def parse_match_conntrack(b): 
+    """struct xt_conntracK_mtinfo3, 版本临时用3"""
+    #type nf_inet_addr, 取struct in6_addr
+    origsrc_ip = read_addr6(b)
+    origsrc_mask = read_addr6(b)
+    origdst_ip = read_addr6(b)
+    origdst_mask = read_addr6(b)
+    replsrc_ip = read_addr6(b)
+    replsrc_mask = read_addr6(b)
+    repldst_ip = read_addr6(b)
+    repldst_mask = read_addr6(b)
+    expires_min, expires_max = struct.unpack("II", b.read(8))
+    l4proto, origsrc_port, origdst_port, replsrc_port, repldst_port = struct.unpack("HHHHH", b.read(10))
+    match_flags, invert_flags, state_mask, status_mask = struct.unpack("HHHH", b.read(8))
+    origsrc_port_high, origdst_port_high, replsrc_port_high, repldst_port_high = struct.unpack("HHHH", b.read(8))
+    return {
+            "origsrc_ip": origsrc_ip,
+            "origsrc_mask": origsrc_mask,
+            "origdst_ip": origdst_ip,
+            "origdst_mask": origdst_mask,
+            "replsrc_ip": replsrc_ip,
+            "replsrc_mask": replsrc_mask,
+            "repldst_ip": repldst_ip,
+            "repldst_mask": repldst_mask,
+            "expires_min": expires_min,
+            "expires_max": expires_max,
+            "l4proto": l4proto,
+            "origsrc_port": origsrc_port,
+            "replsrc_port": replsrc_port,
+            "origdst_port": origdst_port,
+            "repldst_port": repldst_port,
+            "match_flags": match_flags,
+            "invert_flags": invert_flags,
+            "state_mask": state_mask,
+            "status_mask": status_mask,
+            "origsrc_port_high": origsrc_port_high,
+            "origdst_port_high": origdst_port_high,
+            "replsrc_port_high": replsrc_port_high,
+            "repldst_port_high": repldst_port_high
+            } 
+
+
+def generate_match_conntrack(d):
+    pass
+
+
+def parse_match_limit(b):
+    """struct xt_rateinfo"""
+    avg, burst = struct.unpack("II", b.read(8))    
+    #ignore 64 byte used by the kernel
+    return {
+            "avg": avg,
+            "burst": burst
+            }
+
+
+def generate_match_limit(d):
+    pass
+
+def parse_match_pkttype(b):
+    pkttype, invert = struct.unpack("ii", b.read(8))
+    return {
+            "pkttype": pkttype,
+            "invert": invert
+            }
+
+
+def generate_match_pkttype(d):
+    pass
+
+
+def parse_match_icmp(b):
+    tp, code_min, code_max, invflags = struct.unpack("BBBB", b.read(4))
+
+
+def generate_match_icmp(d):
     pass
 
 
 match_plugin = {
-
+        "conntrack": (parse_match_conntrack, generate_match_conntrack),
+        "limit": (parse_match_limit, generate_match_limit),
+        "pkttype": (parse_match_pkttype, generate_match_pkttype),
+        "icmp": (parse_match_icmp, generate_match_icmp), 
         }
 
 
-def parse_match_conntrack(b):
-    pass
-
-target_plugin = {
-        "conntrack": parse_match_conntrack
-        }
-
-#A -> B,  default, generator, parser
-
+#A -> B,  default, generator, parser 
 def parse_chains(info, entries): 
     chains = {}
     offsetd = {}
     bltchain = {} 
     for i in entries:
         #fix offset
-        i["offset"] -= 40
+        i["offset"] -= 40 
         matches = i["matches"]
-        for j in matches: 
-            off = j["name"].find("\x00")
+        for j, v in enumerate(matches): 
+            off = v["name"].find("\x00")
             #blt chain
             if off < 0:
                 continue
-            match = j["name"][:off]
-            #parse match
-            parser = match_plugin[match]
-            matches[j] = parser(cStringIO.StringIO(j["match"])) 
+            match = v["name"][:off]
+            #parse match 
+            parser = match_plugin[match][0]
+            matches[j] = parser(cStringIO.StringIO(v["match"])) 
         offsetd[i["offset"]] = i 
-    #blt chain table
+    #blt chain table 
     for i, v in enumerate(info["hook_entry"]):
         if v in offsetd:
             bltchain[v] = blt_chain_table[i]
     #built chains
-    #target的判定, target是ERROR则用户定义的chain
+    #target的判定, target是ERROR则用户定义的chain, target也是ERROR的是表尾, 得忽略它们
     #target的name为空则是标准target, 要看verdict, unsigned int
     #verdict如果可能直接指向下一个则是fallthrough, 如果小于0则是标准的, 其它则是jump
-    #target有名则是扩展
+    #target有名则是扩展, chain的最后一个是policy.
     for i in entries:
         target = i["target"]
-        name = target["target"]
+        name = target["name"]
+        data = target["target"] 
         if i["offset"] in bltchain:
             newchain = []
             chains[bltchain[i["offset"]]] = newchain
-        elif name.startswith("ERROR"):
+        elif name.startswith("ERROR"): 
             newchain = [] 
-            chains[name[:name.find("\x00")]] = newchain
-        else:
-            newchain.append(i) 
+            cname = data[:data.find("\x00")]
+            if cname != "ERROR": 
+                chains[cname] = newchain 
+            continue
+        newchain.append(i) 
         if name[0] == "\x00":
-            verdict = struct.unpack("i", target[:4])[0]
+            verdict = struct.unpack("i", data[:4])[0]
             if verdict < 0:
-                pass
-            elif verdict == d["offset"] + d["next_offset"]:
-                pass
+                i["target"] = "accept"
+            elif verdict == i["offset"] + i["next_offset"]:
+                i["target"] = "next"
             else:
-                pass #jump
+                i["target"] = offsetd[verdict]
         else:         
             #plugin 
-            pass 
+            cname = name[:name.find("\x00")].lower() 
+            parser = target_plugin[cname][0]
+            i["target"] = parser(cStringIO.StringIO(data))
+    return chains
 
 
 def test_get_info():
@@ -339,7 +472,7 @@ def test_get_entries():
             }) 
     _sockopt.get(fd, socket.IPPROTO_IP, GET_ENTRIES, data) 
     entries = parse_get_entries(cStringIO.StringIO(data), len(data)) 
-    parse_chains(info, entries["entries"])
-    pprint.pprint(entries)
+    pprint.pprint(parse_chains(info, entries["entries"]))
+    #pprint.pprint(entries)
 
 test_get_entries()
