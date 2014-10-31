@@ -10,8 +10,7 @@ import mmap
 import pprint
 
 
-#用链表替换list,  python里的list是数组实现的
-def new_list():
+def generate_list():
     h = {
         "next": None,
         "prev": None,
@@ -88,26 +87,54 @@ GET_ENTRIES = BASE_CTL + 1
 GET_REVISION_MATCH = BASE_CTL + 2
 GET_REVISION_TARGET = BASE_CTL + 3
 
+XT_ALIGN = 8
+
 #新类型, cstring, struct array
 
 TYPE_STR = 0x1
 TYPE_SIMPLE = 0x2
 TYPE_ARRAY = 0x4
 TYPE_STRUCT = 0x8
-TYPE_ALIGN = 0x10
+TYPE_BUFFER = 0x10
+TYPE_PADDING = 0x20 
+
+#target类型
+TARGET_CONVERT = lambda x: -(x + 1)
+
+NF_DROP = TARGET_CONVERT(0)
+NF_ACCEPT = TARGET_CONVERT(1)
+NF_STOLEN = TARGET_CONVERT(2)
+NF_QUEUE = TARGET_CONVERT(3)
+NF_REPEAT = TARGET_CONVERT(4)
+NF_STOP = TARGET_CONVERT(6)
+NF_FALL = TARGET_CONVERT(10)
+
+target_str_int = {
+        "drop": NF_DROP,
+        "accept": NF_ACCEPT,
+        "stolen": NF_STOLEN,
+        "queue": NF_QUEUE,
+        "repeat": NF_REPEAT,
+        "stop": NF_STOP
+        } 
+
+target_int_str = dict([(x[1], x[0]) for x in target_str_int.items()])
 
 fmt_table = { }
-types = "cbB?hHiIlLqQfdspP"
+types = "cbB?hHiIlLqQfdspP" 
 
 #类型长度表
 for i in types:
     fmt_table[i] = struct.calcsize(i) 
+
+fmt_table["e"] = 0
 
 align_table = {}
 
 #内存对齐表
 for i in types:
     align_table[i] = struct.calcsize("c"+i) - struct.calcsize(i) 
+align_table["e"] = 0
 
 def parse_struct(b, fmt):
     d = {}
@@ -117,11 +144,16 @@ def parse_struct(b, fmt):
         #>H or <H, or H
         f = v[1][-1]
         align = align_table[f] 
+        #force alignment
+        if tp & TYPE_PADDING: 
+            b.seek(align, io.SEEK_CUR) 
+            off += align
+            continue 
         if off % align:
             b.seek(align - off % align, io.SEEK_CUR)
         if tp & TYPE_STR:
             size = v[2]
-            d[i] = b.read(v[2]).strip("\x00") 
+            d[i] = b.read(v[2]).rstrip("\x00") 
         elif tp & TYPE_SIMPLE: 
             size = fmt_table[f]
             d[i] = struct.unpack(v[1], b.read(size))[0] 
@@ -135,21 +167,27 @@ def parse_struct(b, fmt):
             parser = v[2]
             size = v[4]()
             d[i] = parser(cStringIO.StringIO(b.read(size)))
-        elif tp & TYPE_ALIGN:
-            b.seek(v[2], io.SEEK_CUR)
+        elif tp & TYPE_BUFFER: 
+            d[i] = b.read(v[2](d)) 
         off += size
     return d 
 
-def new_struct(d, fmt, default):
+
+def generate_struct(d, fmt, default):
     buf = [] 
-    off = 0
+    off = 0 
     for i,v in fmt: 
         tp = v[0]
         f = v[1][-1]
-        align = align_table[f]
+        align = align_table[f] 
+        #force alignment
+        if tp & TYPE_PADDING: 
+            buf.append(align * "\x00") 
+            off += align
+            continue
         if i in d:
             value = d[i]
-        else:
+        else:  
             value = default[i] 
         if off % align:
             buf.append((align - off % align) * "\x00")
@@ -164,15 +202,52 @@ def new_struct(d, fmt, default):
             f = f * v[2]
             if len(v[1]) > 1:
                 f = v[1][0] + f 
-            buf.append(struct.pack(f * v[2], *value)) 
+            buf.append(struct.pack(f, *value)) 
         elif tp & TYPE_STRUCT:
             generator = v[3]
             size = v[4]()
             buf.append(generator(value)) 
-        elif tp & TYPE_ALIGN: 
-            buf.append(value * "\x00") 
+        elif tp & TYPE_BUFFER:
+            buf.append(value) 
         off += size   
     return "".join(buf)
+
+
+
+#A -> B,  default, generator, parser 
+def parse_chains(info, entries): 
+    chains = {}
+    offsetd = {}
+    bltchain = {} 
+    #blt chain table 
+    for i, v in enumerate(info["hook_entry"]):
+        if v in offsetd:
+            bltchain[v] = blt_chain_table[i] 
+    for i in entries:
+        target = i["target"]
+        name = target["name"]
+        payload = target["payload"] 
+        if i["offset"] in bltchain:
+            newchain = generate_list()
+            chains[bltchain[i["offset"]]] = newchain
+        elif name.startswith("ERROR"): 
+            newchain = generate_list()
+            cname = payload[:payload.find("\x00")] 
+            if cname != "ERROR": 
+                chains[cname] = newchain 
+            continue
+        list_push(newchain, i) 
+    return chains 
+
+
+def generate_chains(chains):
+    #表尾加ERROR
+    pass
+
+
+def generate_chain(chain):
+    #chain头为ERROR
+    pass
 
 
 getinfo_fmt = (
@@ -182,67 +257,55 @@ getinfo_fmt = (
         ("underflow", (TYPE_ARRAY, "I", NUMHOOKS)),
         ("num_entries", (TYPE_SIMPLE, "I")),
         ("size", (TYPE_SIMPLE, "I")),
-        ("-align", (TYPE_ALIGN, 'c', 0))
+        ("padding", (TYPE_PADDING, 'e'))
         ) 
 
 
 getinfo_default = {
     "name": TABLE_MAXNAMELEN * "\x00",
     "valid_hooks": 0,
-    "hook_entry": [0] * NUMHOOKS,
-    "underflow": [0] * NUMHOOKS,
+    "hook_entry": (0, ) * NUMHOOKS,
+    "underflow": (0, ) * NUMHOOKS,
     "num_entries": 0,
-    "size": 0
+    "size": 0 
     } 
 
 
-def new_get_info(d):
-    buf = []
-    name = d["name"]
-    if len(name) > TABLE_MAXNAMELEN:
-        raise ValueError("max table name length: %d" % TABLE_MAXNAMELEN);
-    buf.append(name)
-    #padding
-    buf.append((TABLE_MAXNAMELEN - len(name)) * "\x00")
-    buf.append(struct.pack("I", d["valid_hooks"]))
-    hooks = d["hook_entry"]
-    for i in range(NUMHOOKS):
-        buf.append(struct.pack("I", hooks[i]))
-    underflow = d["underflow"]
-    for i in range(NUMHOOKS):
-        buf.append(struct.pack("I", underflow[i]))
-    buf.append(struct.pack("II", d["num_entries"], d["size"]))
-    return "".join(buf);
+def generate_get_info(d):
+    return generate_struct(d, getinfo_fmt, getinfo_default)
 
 
 def parse_get_info(b):
     return parse_struct(b, getinfo_fmt)
 
 
+entries_size = lambda d: d["size"]
+
 get_entries_fmt = (
         ("name", (TYPE_STR, "c", TABLE_MAXNAMELEN)),
         ("size", (TYPE_SIMPLE, "I")),
-        ("-align", (TYPE_ALIGN, "c", 4))
+        ("padding", (TYPE_PADDING, "I")),
+        ("entries", (TYPE_BUFFER, "c", entries_size)), 
         )
 
-def new_get_entries(d): 
-    buf = []
-    name = d["name"]
-    if len(name) > TABLE_MAXNAMELEN:
-        raise ValueError("max table name length: %d" % TABLE_MAXNAMELEN);
-    buf.append(name)
-    buf.append((TABLE_MAXNAMELEN - len(name)) * "\x00")
-    buf.append(struct.pack("I", d["size"]))
-    buf.append(d["entries"])
-    #padding for struct ipt_entry entrytable[0]
-    buf.append(4 * "\x00")
-    return "".join(buf)
+
+get_entries_default = {
+        "name": TABLE_MAXNAMELEN * "\x00", 
+        "size": 0,
+        "entries": "", 
+        }
+
+def generate_get_entries(d): 
+    return generate_struct(d, get_entries_fmt,
+            get_entries_default)
 
 
-def parse_get_entries(b, mlen):
+def parse_get_entries(b, mlen): 
     d = parse_struct(b, get_entries_fmt)
+    b = cStringIO.StringIO(d["entries"])
     entries = []
-    while b.tell() < mlen:
+    elen = len(d["entries"])
+    while b.tell() < elen:
         entries.append(parse_entry(b))
     d["entries"] = entries
     return d
@@ -273,24 +336,9 @@ INV_PROTO = 0x40
 INV_MASK = 0x7f
 
 
-def fill_ip(d):
-    #必须指定的iface及掩码, src, dst的IP与掩码, 什么协议
-    pass
 
-
-def new_ip(d):
-    buf = []
-    buf.append(struct.pack(">IIII", d["src"], d["dst"], d["smsk"], d["dmsk"]))
-    buf.append(d["iniface"])
-    buf.append((IFNAMSIZ - len(d["iniface"])) * "\x00")
-    buf.append(d["outiface"])
-    buf.append((IFNAMSIZ - len(d["outiface"])) * "\x00")
-    buf.append(d["iniface_mask"])
-    buf.append((IFNAMSIZ - len(d["iniface_mask"])) * "\x00")
-    buf.append(d["outiface_mask"])
-    buf.append((IFNAMSIZ - len(d["outiface_mask"])) * "\x00")
-    buf.append(struct.pack("HBB", d["proto"], d["flags"], d["invflags"]))
-    return "".join(buf) 
+def generate_ip(d):
+    return generate_struct(d, ip_fmt) 
 
 
 ip_fmt = (
@@ -305,15 +353,35 @@ ip_fmt = (
         ("proto", (TYPE_SIMPLE, "H")),
         ("flags", (TYPE_SIMPLE, "B")),
         ("invflags", (TYPE_SIMPLE, "B"))
-        )
+        ) 
+
+
+ip_default = {
+        "src": 0,
+        "dst": 0,
+        "smsk": 0,
+        "dmsk": 0,
+        "iniface": IFNAMSIZ * "\x00",
+        "outiface": IFNAMSIZ * "\x00",
+        "iniface_mask": IFNAMSIZ * "\x00",
+        "outiface_mask": IFNAMSIZ * "\x00",
+        "proto": 0,
+        "flags": 0,
+        "invflags": 0
+        } 
+
 
 def parse_ip(b):
     return parse_struct(b, ip_fmt)
 
 
-def new_entry(d):
+def generate_entry(d):
     buf = []
-    buf.append(new_ip(d["ip"]))
+    ip = generate_ip(d["ip"], ip_fmt, ip_default) 
+    matches = generate_matches(d["matches"])
+    target = generate_target(d["target"])
+    d["target_offset"] = ip + matches
+    d["next_offset"] = ip + matches + target
     buf.append(struct.pack("IHHIQQ", d["nfcache"], 
         d["target_offset"], d["next_offset"], d["comefrom"],
         d["pcnt"], d["bcnt"])) 
@@ -325,14 +393,8 @@ def parse_entry(b):
     ip = parse_ip(b)
     nfcache, target_offset, next_offset, comefrom = struct.unpack("IHHI", b.read(12))
     pcnt, bcnt = struct.unpack("QQ", b.read(16)) 
-    ipt_len = b.tell() - start 
-    #data = b.read(target_offset - ipt_len) 
-    matches = parse_matches(b, start + target_offset)
-    #matches = parse_matches(cStringIO.StringIO(data), len(data))
-    #data = b.read(next_offset - target_offset) 
-    target = parse_target(b, start + next_offset)
-    #target = parse_target(cStringIO.StringIO(data)) 
-    #bug
+    matches = parse_matches(b, start + target_offset) 
+    target = parse_target(b) 
     b.seek(start + next_offset)
     return {
             "ip": ip,
@@ -347,39 +409,109 @@ def parse_entry(b):
             "target": target
             } 
 
+
+
+def generate_matches(matches):
+    buf = []
+    for k,v in matches:
+        generator = match_plugin[k][1]
+        payload = generator(v)
+        plen = len(payload)
+        if plen % XT_ALIGN: 
+            payload += (XT_ALIGN - plen % XT_ALIGN) * "\x00" 
+        buf.append(payload) 
+    return "".join(buf) 
+
+
+
 def parse_matches(b, mlen):
     matches = [] 
     while b.tell() < mlen: 
-        match_size = struct.unpack("H", b.read(2))[0]
-        #bug
-        if not match_size:
-            pdb.set_trace()
-        name = b.read(XT_EXTENSION_MAXNAMELEN)
-        revision = struct.unpack("B", b.read(1))[0] 
-        match = b.read(match_size - 32)
-        matches.append({
-                "size": match_size,
-                "match": match,
-                "revision": revision,
-                "name": name
-                }) 
-    return matches
+        m = parse_match(b)
+        off = m["name"].find("\x00")
+        if off < 0:
+            continue
+        name = m["name"][:off]
+        parser = match_plugin[name][0] 
+        m["payload"] = parser(cStringIO.StringIO(m["payload"]))
+        matches.append(m) 
+    return matches 
 
 
-def parse_target(b, mlen):
-    target_size = struct.unpack("H", b.read(2))[0]
-    name = b.read(XT_EXTENSION_MAXNAMELEN)
-    revision = struct.unpack("B", b.read(1))[0]
-    target = b.read(target_size - 32)
-    #bug
-    if b.tell() != mlen:
-        pdb.set_trace()
-    return {
-            "size": target_size,
-            "name": name,
-            "revision": revision,
-            "target": target
-            }
+match_size = lambda d: d["match_size"] - 32
+
+
+match_fmt = (
+        ("match_size", (TYPE_SIMPLE, "H")),
+        ("name", (TYPE_STR, "c", XT_EXTENSION_MAXNAMELEN)),
+        ("revision", (TYPE_SIMPLE, "B")),
+        ("payload", (TYPE_BUFFER, "c", match_size)),
+        )
+
+
+match_default = {
+        "match_size": 0
+        "name": XT_EXTENSION_MAXNAMELEN * "\x00",
+        "revision": 0,
+        "payload": ""
+        } 
+
+def parse_match(b):
+    return parse_struct(b, match_fmt) 
+
+
+def generate_match(d): 
+    return generate_struct(d, match_fmt, match_default)
+
+
+target_size = lambda d: d["target_size"] - 32
+
+
+target_fmt = (
+    ("target_size", (TYPE_SIMPLE, "H")),
+    ("name", (TYPE_STR, "c", XT_EXTENSION_MAXNAMELEN)),
+    ("revision", (TYPE_SIMPLE, "B")),
+    ("payload", (TYPE_BUFFER, "c", target_size))
+    )
+
+target_default = {
+        "target_size": 0,
+        "name": XT_EXTENSION_MAXNAMELEN * "\x00",
+        "revision": 0,
+        "payload": ""
+        } 
+
+def generate_target(d):
+    if d["name"][0] == "\x00":
+        generator = target_plugin["std"][1]
+        payload = generator(d["payload"])
+    else:
+        generator = target_plugin[d["name"]][1]
+        payload = generator(d["payload"])
+    if len(payload) % XT_ALIGN:
+        payload += (XT_ALIGN - len(payload) % XT_ALIGN) * "\x00"
+    d["target_size"] = len(payload)
+    return generate_struct(d,  target_fmt, target_default)
+    
+
+def parse_target(b):
+    d =  parse_struct(b, target_fmt) 
+    target = d["target"]
+    name = target["name"]
+    payload = target["payload"]
+    if name[0] == "\x00":
+        verdict = struct.unpack("i", payload[:4])[0]
+        if verdict < 0:
+            d["payload"] = verdict
+        elif verdict == i["offset"] + i["next_offset"]:
+            d["payload"]  = NF_FALL
+        else:
+            d["payload"] = verdict
+    else:
+        cname = name[:name.find("\x00")].lower()
+        parser = target_plugin[cname][0]
+        d["payload"] = parser(cStringIO.StringIO(payload))
+    return d 
 
 
 NET_UNREACHABLE = 0
@@ -786,9 +918,17 @@ tproxy_fmt = (
         ("lport", (TYPE_SIMPLE, ">H"))
         )
 
+def parse_target_std(b):
+    pass
+
+def generate_target_std(d):
+    return struct.pack("i", d["verdict"])
+
+
 target_plugin = {
         "reject": (parse_target_reject, generate_target_reject), 
-        "log": (parse_target_log, generate_target_log)
+        "log": (parse_target_log, generate_target_log),
+        "std": (parse_target_std, generate_target_std)
         }
 
 
@@ -882,6 +1022,7 @@ TCP_INV_FLAGS = 0x04
 TCP_INV_OPTION = 0x08
 TCP_INV_MASK=  0x0F
 
+
 def parse_match_tcp(b):
     return parse_struct(b, tcp_fmt)
 
@@ -904,8 +1045,10 @@ udp_fmt = (
 def parse_match_udp(b):
     return parse_struct(b, udp_fmt)
 
+
 def generate_match_udp(b):
     pass
+
 
 
 ADDRTYPE_UNSPEC = 1 << 0
@@ -1598,9 +1741,6 @@ physdev_info = (
 #skip
 POLICY_MAX_ELEM = 4
 
-policy_fmt = (
-
-        )
 
 """
 static struct xt_match quota_mt_reg __read_mostly = {
@@ -1871,70 +2011,12 @@ match_plugin = {
         } 
 
 
-#A -> B,  default, generator, parser 
-def parse_chains(info, entries): 
-    chains = {}
-    offsetd = {}
-    bltchain = {} 
-    for i in entries:
-        #fix offset
-        i["offset"] -= 40 
-        md = {}
-        ml = i["matches"]
-        i["matches"] = md
-        for v in ml: 
-            off = v["name"].find("\x00")
-            #blt chain
-            if off < 0:
-                continue
-            match = v["name"][:off]
-            #parse match 
-            parser = match_plugin[match][0]
-            md[match] = parser(cStringIO.StringIO(v["match"])) 
-        offsetd[i["offset"]] = i 
-    #blt chain table 
-    for i, v in enumerate(info["hook_entry"]):
-        if v in offsetd:
-            bltchain[v] = blt_chain_table[i] 
-    #built chains
-    #target的判定, target是ERROR则用户定义的chain, target也是ERROR的是表尾, 得忽略它们
-    #target的name为空则是标准target, 要看verdict, unsigned int
-    #verdict如果可能直接指向下一个则是fallthrough, 如果小于0则是标准的, 其它则是jump
-    #target有名则是扩展, chain的最后一个是policy.
-    for i in entries:
-        target = i["target"]
-        name = target["name"]
-        data = target["target"] 
-        if i["offset"] in bltchain:
-            newchain = new_list()
-            chains[bltchain[i["offset"]]] = newchain
-        elif name.startswith("ERROR"): 
-            newchain = new_list()
-            cname = data[:data.find("\x00")] 
-            if cname != "ERROR": 
-                chains[cname] = newchain 
-            continue
-        list_push(newchain, i) 
-        if name[0] == "\x00":
-            verdict = struct.unpack("i", data[:4])[0]
-            if verdict < 0:
-                i["target"] = "accept"
-            elif verdict == i["offset"] + i["next_offset"]:
-                i["target"] = "next"
-            else:
-                i["target"] = offsetd[verdict]
-        else:         
-            #plugin 
-            cname = name[:name.find("\x00")].lower() 
-            parser = target_plugin[cname][0]
-            i["target"] = parser(cStringIO.StringIO(data))
-    return chains 
 
 
 def test_get_info():
     sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW)
     fd = sock.fileno() 
-    data = new_get_info(
+    data = generate_get_info(
             {
                 "name": "filter", 
                 "valid_hooks": 0,
@@ -1950,7 +2032,7 @@ def test_get_info():
 def test_get_entries(): 
     sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW)
     fd = sock.fileno() 
-    data = new_get_info(
+    data = generate_get_info(
             {
                 "name": "filter", 
                 "valid_hooks": 0,
@@ -1961,7 +2043,7 @@ def test_get_entries():
                 }) 
     _sockopt.get(fd, socket.IPPROTO_IP, GET_INFO, data) 
     info = parse_get_info(cStringIO.StringIO(data)) 
-    data = new_get_entries(
+    data = generate_get_entries(
             {
                 "name": "filter",
                 "size": info["size"],

@@ -57,6 +57,6 @@ init_sockopt(void)
 	PyObject *m;		
 	m  = Py_InitModule("_sockopt", sockopt_methods);
 	if (m == NULL) {
-		PyErr_SetString(PyExc_RuntimeError, "load module _kmsg failed");
+		PyErr_SetString(PyExc_RuntimeError, "load module _sockopt failed");
 	}
 }
