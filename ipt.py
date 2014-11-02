@@ -10,53 +10,10 @@ import mmap
 import pprint
 
 
-def generate_list():
-    h = {
-        "next": None,
-        "prev": None,
-        "payload": None,
-        }
-    h["next"] = h
-    h["prev"] = h
-    return h
-
-
-def list_push(h, payload):
-    node = {
-            "next": None,
-            "prev": None,
-            "payload": payload
-            }
-    last = h["prev"] 
-    last["next"] = node
-    node["prev"] = last
-    node["next"] = h 
-    h["prev"] = node
-
-
-def list_pop(h):
-    if id(h["next"]) == id(h):
-        return None 
-    ret = h["prev"]
-    h["prev"] = ret["prev"]
-    ret["prev"]["next"] = h 
-    return ret["payload"]
-
-
-def list_foreach(h, func):
-    node = h["next"]
-    hid = id(h)
-    while True:
-        func(node["payload"])
-        node = node["next"]
-        if id(node) == hid:
-            break 
-
-
-
-TABLE_MAXNAMELEN = 32 
+XT_TABLE_MAXNAMELEN = 32 
 IFNAMSIZ = 16
 XT_EXTENSION_MAXNAMELEN = 29
+XT_FUNCTION_MAXNAMELEN = 30
 
 
 #内置的chain, 也叫hook
@@ -76,6 +33,7 @@ blt_chain_table = {
         POST_ROUTING: "postrouting"
         }
 
+blt_chain_name = dict([(x[1], x[0]) for x in blt_chain_table.items()])
 
 #控制选项
 BASE_CTL = 64
@@ -88,6 +46,7 @@ GET_REVISION_MATCH = BASE_CTL + 2
 GET_REVISION_TARGET = BASE_CTL + 3
 
 XT_ALIGN = 8
+XT_ERROR = "ERROR"
 
 #新类型, cstring, struct array
 
@@ -144,7 +103,6 @@ def parse_struct(b, fmt):
         #>H or <H, or H
         f = v[1][-1]
         align = align_table[f] 
-        #force alignment
         if tp & TYPE_PADDING: 
             b.seek(align, io.SEEK_CUR) 
             off += align
@@ -180,7 +138,6 @@ def generate_struct(d, fmt, default):
         tp = v[0]
         f = v[1][-1]
         align = align_table[f] 
-        #force alignment
         if tp & TYPE_PADDING: 
             buf.append(align * "\x00") 
             off += align
@@ -219,39 +176,116 @@ def parse_chains(info, entries):
     chains = {}
     offsetd = {}
     bltchain = {} 
+    jump = []
+    for i in entries:
+        offsetd[i["offset"]] = i
     #blt chain table 
     for i, v in enumerate(info["hook_entry"]):
         if v in offsetd:
             bltchain[v] = blt_chain_table[i] 
-    for i in entries:
-        target = i["target"]
+    for i,v in enumerate(entries): 
+        target = v["target"]
         name = target["name"]
         payload = target["payload"] 
-        if i["offset"] in bltchain:
-            newchain = generate_list()
-            chains[bltchain[i["offset"]]] = newchain
+        #hook没有dummy head
+        if v["offset"] in bltchain:
+            newchain = []
+            chains[bltchain[v["offset"]]] = newchain
+        #新chain的标志
         elif name.startswith("ERROR"): 
-            newchain = generate_list()
+            newchain = []
             cname = payload[:payload.find("\x00")] 
+            #忽略掉tail
             if cname != "ERROR": 
                 chains[cname] = newchain 
             continue
-        list_push(newchain, i) 
+        newchain.append(v)
+        verdict = v["target"]["payload"]
+        #忽略处理过的target插件
+        if isinstance(verdict, dict):
+            continue
+        #忽略std
+        if verdict < 0: 
+            continue
+        #fallthrough
+        elif verdict == entries[i+1]["offset"]: 
+            v["target"]["payload"] = NF_FALL
+        #跳到某个chain
+        else: 
+            jump.append(v) 
+    for k, v in chains.items():
+        bltchain[v[0]["offset"]] = k
+    for i in jump:
+        i["target"]["payload"] = bltchain[i["target"]["payload"]]
     return chains 
 
 
-def generate_chains(chains):
-    #表尾加ERROR
-    pass
+def generate_chains(chains): 
+    fall = [] 
+    chain_loc = {}
+    buf = []
+    off = 0
+    for k,v in chains.items(): 
+        start = off 
+        #非hook, 加头
+        if not k in blt_chain_name:
+            h = new_error_entry(k)
+            off += len(h)
+            buf.append(h)  
+        chain = v
+        for i, v in enumerate(chain): 
+            target = v["target"]
+            if target["name"] == "std": 
+                payload = target["payload"]
+                #jump 
+                if isinstance(payload, str):
+                    #记录生成的位置，与v
+                    jump.append((len(buf), v))
+                #standard or fallthrough 
+                if payload == NF_FALL:
+                    #先算offset
+                    d = generate_entry(v) 
+                    #修改
+                    v["target"]["payload"] = off + len(d) 
+            pdb.set_trace()
+            d = generate_entry(v)
+            off += len(d)
+            buf.append(d)
+        #记录chain的始终位置
+        chain_loc[k] = {
+                "start": start,
+                "end": off
+                } 
+
+    for k, j in jump:    
+        #换chain名为其offset
+        offset = chain_loc[j["target"]["payload"]]["start"] 
+        j["target"]["payload"] = offset
+        #重新生成
+        buf[k] = generate_entry(j) 
+
+    #添加tail
+    tail = new_error_entry(XT_ERROR)
+    buf.append(tail)
+    return "".join(buf)
 
 
-def generate_chain(chain):
-    #chain头为ERROR
-    pass
+def new_error_entry(name):
+    return generate_entry({
+        "ip": {},
+        "matches": [],
+        "target": {
+            "name": XT_ERROR,
+            "revision": 0,
+            "payload": {
+                "name": name
+                }
+            }
+        }) 
 
 
 getinfo_fmt = (
-        ("name", (TYPE_STR, "c", TABLE_MAXNAMELEN)),
+        ("name", (TYPE_STR, "c", XT_TABLE_MAXNAMELEN)),
         ("valid_hooks", (TYPE_SIMPLE, "I")),
         ("hook_entry", (TYPE_ARRAY, "I", NUMHOOKS)),
         ("underflow", (TYPE_ARRAY, "I", NUMHOOKS)),
@@ -262,7 +296,7 @@ getinfo_fmt = (
 
 
 getinfo_default = {
-    "name": TABLE_MAXNAMELEN * "\x00",
+    "name": XT_TABLE_MAXNAMELEN * "\x00",
     "valid_hooks": 0,
     "hook_entry": (0, ) * NUMHOOKS,
     "underflow": (0, ) * NUMHOOKS,
@@ -282,7 +316,7 @@ def parse_get_info(b):
 entries_size = lambda d: d["size"]
 
 get_entries_fmt = (
-        ("name", (TYPE_STR, "c", TABLE_MAXNAMELEN)),
+        ("name", (TYPE_STR, "c", XT_TABLE_MAXNAMELEN)),
         ("size", (TYPE_SIMPLE, "I")),
         ("padding", (TYPE_PADDING, "I")),
         ("entries", (TYPE_BUFFER, "c", entries_size)), 
@@ -290,7 +324,7 @@ get_entries_fmt = (
 
 
 get_entries_default = {
-        "name": TABLE_MAXNAMELEN * "\x00", 
+        "name": XT_TABLE_MAXNAMELEN * "\x00", 
         "size": 0,
         "entries": "", 
         }
@@ -338,7 +372,7 @@ INV_MASK = 0x7f
 
 
 def generate_ip(d):
-    return generate_struct(d, ip_fmt) 
+    return generate_struct(d, ip_fmt, ip_default) 
 
 
 ip_fmt = (
@@ -376,16 +410,27 @@ def parse_ip(b):
 
 
 def generate_entry(d):
-    buf = []
-    ip = generate_ip(d["ip"], ip_fmt, ip_default) 
-    matches = generate_matches(d["matches"])
-    target = generate_target(d["target"])
-    d["target_offset"] = ip + matches
-    d["next_offset"] = ip + matches + target
-    buf.append(struct.pack("IHHIQQ", d["nfcache"], 
-        d["target_offset"], d["next_offset"], d["comefrom"],
-        d["pcnt"], d["bcnt"])) 
-    return "".join(buf)
+    buf = [] 
+    ip = generate_ip(d["ip"])
+    buf.append(ip)
+    matches = generate_matches(d["matches"]) 
+    target = generate_target(d["target"]) 
+    d["target_offset"] = (len(ip) + 
+            struct.calcsize("IHHI") + 
+            struct.calcsize("QQ") +
+            len(matches))
+    d["next_offset"] = d["target_offset"] + len(target)
+    buf.append(struct.pack("IHHI", 0, 
+        d["target_offset"], d["next_offset"], 0)) 
+    buf.append(struct.pack("QQ", 0, 0))
+    buf.append(matches)
+    buf.append(target)
+    data = "".join(buf) 
+    parse_entry(cStringIO.StringIO(data))
+    #bug
+    if len(data) % XT_ALIGN:
+        pdb.set_trace()
+    return data
             
 
 def parse_entry(b): 
@@ -395,6 +440,9 @@ def parse_entry(b):
     pcnt, bcnt = struct.unpack("QQ", b.read(16)) 
     matches = parse_matches(b, start + target_offset) 
     target = parse_target(b) 
+    #bug
+    if b.tell() != start + next_offset:
+        pdb.set_trace()
     b.seek(start + next_offset)
     return {
             "ip": ip,
@@ -410,16 +458,18 @@ def parse_entry(b):
             } 
 
 
-
 def generate_matches(matches):
     buf = []
-    for k,v in matches:
-        generator = match_plugin[k][1]
-        payload = generator(v)
+    for i in matches:
+        pdb.set_trace()
+        generator = match_plugin[i["name"]][1]
+        payload = generator(i["payload"])
         plen = len(payload)
         if plen % XT_ALIGN: 
             payload += (XT_ALIGN - plen % XT_ALIGN) * "\x00" 
-        buf.append(payload) 
+        i["payload"] = payload
+        data = generate_match(i)
+        buf.append(data) 
     return "".join(buf) 
 
 
@@ -432,6 +482,7 @@ def parse_matches(b, mlen):
         if off < 0:
             continue
         name = m["name"][:off]
+        m["name"] = name
         parser = match_plugin[name][0] 
         m["payload"] = parser(cStringIO.StringIO(m["payload"]))
         matches.append(m) 
@@ -450,7 +501,7 @@ match_fmt = (
 
 
 match_default = {
-        "match_size": 0
+        "match_size": 0,
         "name": XT_EXTENSION_MAXNAMELEN * "\x00",
         "revision": 0,
         "payload": ""
@@ -482,35 +533,51 @@ target_default = {
         } 
 
 def generate_target(d):
-    if d["name"][0] == "\x00":
+    if d["name"] == "std":
         generator = target_plugin["std"][1]
+        pdb.set_trace()
         payload = generator(d["payload"])
+        del d["name"]
     else:
-        generator = target_plugin[d["name"]][1]
+        generator = target_plugin[d["name"]][1] 
         payload = generator(d["payload"])
     if len(payload) % XT_ALIGN:
         payload += (XT_ALIGN - len(payload) % XT_ALIGN) * "\x00"
-    d["target_size"] = len(payload)
+    d["payload"] = payload 
+    d["target_size"] = len(payload) + 32
     return generate_struct(d,  target_fmt, target_default)
-    
 
-def parse_target(b):
+    
+def test_target():
+    d = {
+        "revision": 0,
+        "name": "REJECT",
+        "payload": {
+            "reject_with": 7
+            }
+        }
+    r = generate_target(d) 
+    d2 = parse_target(cStringIO.StringIO(r)) 
+
+
+def parse_target(b): 
     d =  parse_struct(b, target_fmt) 
-    target = d["target"]
-    name = target["name"]
-    payload = target["payload"]
-    if name[0] == "\x00":
-        verdict = struct.unpack("i", payload[:4])[0]
-        if verdict < 0:
-            d["payload"] = verdict
-        elif verdict == i["offset"] + i["next_offset"]:
-            d["payload"]  = NF_FALL
-        else:
-            d["payload"] = verdict
+    name = d["name"]
+    payload = d["payload"]
+    if not name or name[0] == "\x00":
+        d["name"] = "std" 
+        d["payload"] = struct.unpack("i", payload[:4])[0] 
     else:
-        cname = name[:name.find("\x00")].lower()
-        parser = target_plugin[cname][0]
-        d["payload"] = parser(cStringIO.StringIO(payload))
+        off = name.find("\x00")
+        if off < 0:
+            cname = name
+        else:
+            cname = name[:off] 
+        if cname == "ERROR":
+            return d
+        d["name"] = cname
+        parser = target_plugin[cname][0] 
+        d["payload"] = parser(cStringIO.StringIO(payload)) 
     return d 
 
 
@@ -545,7 +612,7 @@ def parse_target_reject(b):
             }
 
 def generate_target_reject(d):
-    pass
+    return struct.pack("I", d["reject_with"])
 
 
 def parse_target_log(b):
@@ -922,19 +989,31 @@ def parse_target_std(b):
     pass
 
 def generate_target_std(d):
-    return struct.pack("i", d["verdict"])
+    return struct.pack("i", d)
+
+
+def parse_target_error(b):
+    pass
+
+
+def generate_target_error(d): 
+    n = d["name"]
+    return n + (XT_FUNCTION_MAXNAMELEN - len(n)) * "\x00"
 
 
 target_plugin = {
-        "reject": (parse_target_reject, generate_target_reject), 
-        "log": (parse_target_log, generate_target_log),
-        "std": (parse_target_std, generate_target_std)
+        "REJECT": (parse_target_reject, generate_target_reject), 
+        "LOG": (parse_target_log, generate_target_log),
+        #下面的不是插件，不要用
+        "std": (parse_target_std, generate_target_std),
+        "ERROR": (parse_target_error, generate_target_error)
         }
 
 
 def parse_match_conntrack(b): 
     """struct xt_conntracK_mtinfo3, 版本临时用3"""
     return parse_struct(b, conntrack_fmt_v3)
+
 
 conntrack_fmt_v3 = (
         ("origsrc_ip", (TYPE_ARRAY, ">I", 4)),
@@ -989,7 +1068,7 @@ def parse_match_pkttype(b):
 
 
 def generate_match_pkttype(d):
-    pass
+    return struct.pack("ii", d["pkttype"], d["invert"])
 
 
 icmp_fmt = (
@@ -999,12 +1078,19 @@ icmp_fmt = (
         ("invflags", (TYPE_SIMPLE, "B"))
         )
 
+icmp_default = {
+        "type": 0,
+        "code_min": 0,
+        "code_max": 0,
+        "invflags": 0
+        }
+
 def parse_match_icmp(b):
     return parse_struct(b, icmp_fmt) 
 
 
 def generate_match_icmp(d):
-    pass
+    return generate_match_icmp(b, icmp_fmt, icmp_default)
 
 
 tcp_fmt = (
@@ -1015,6 +1101,7 @@ tcp_fmt = (
         ("flg_cmp", (TYPE_SIMPLE, "B")),
         ("invflags", (TYPE_SIMPLE, "B"))
         )
+
 
 TCP_INV_SCPT = 0x01
 TCP_INV_DSTPT = 0x02
@@ -2001,6 +2088,8 @@ static struct xt_match xt_u32_mt_reg __read_mostly = {
 """
 #skip 
 
+#parse_match都加revision参数
+
 match_plugin = { 
         "conntrack": (parse_match_conntrack, generate_match_conntrack),
         "limit": (parse_match_limit, generate_match_limit),
@@ -2009,8 +2098,6 @@ match_plugin = {
         "tcp": (parse_match_tcp, generate_match_tcp),
         "udp": (parse_match_udp, generate_match_udp),
         } 
-
-
 
 
 def test_get_info():
@@ -2029,15 +2116,15 @@ def test_get_info():
     pprint.pprint(parse_get_info(cStringIO.StringIO(data))) 
 
 
-def test_get_entries(): 
+def dump_table(table): 
     sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW)
     fd = sock.fileno() 
     data = generate_get_info(
             {
-                "name": "filter", 
+                "name": table,
                 "valid_hooks": 0,
                 "hook_entry": (0,) * NUMHOOKS,
-                "underflow": (0, ) * NUMHOOKS,
+                "underflow": (0,) * NUMHOOKS,
                 "num_entries": 0,
                 "size": 0 
                 }) 
@@ -2045,7 +2132,7 @@ def test_get_entries():
     info = parse_get_info(cStringIO.StringIO(data)) 
     data = generate_get_entries(
             {
-                "name": "filter",
+                "name": table,
                 "size": info["size"],
                 "entries": info["size"] * "\x00"
             }) 
@@ -2057,7 +2144,39 @@ def test_get_entries():
     for i,v in chains.items():
         print "=============="
         print "chain:", i 
-        list_foreach(v, print_rule)
-    #pprint.pprint(entries)
+        for i in v:
+            print_rule(i) 
+    d = generate_chains(chains)
 
-test_get_entries()
+
+def ip_to_num(ip):
+    return struct.unpack(">I", socket.inet_aton(ip))[0]
+
+
+def test_entry(): 
+    generate_entry({ "ip": { 
+            "dst": ip_to_num("106.186.112.80"),
+            "dmsk": 0xffffffff
+            },
+        "matches": [],
+        "target": {
+            "revision": 0,
+            "name": "std",
+            "payload": {
+                "verdict": NF_DROP
+                }
+            }
+    })
+
+
+if __name__ == "__main__":
+    import sys, argparse
+    parser = argparse.ArgumentParser(
+            description="iptables")
+    parser.add_argument("-t", type=str, help="get by table")
+    parser.add_argument("-e", type=str, help="test entry")
+    args = parser.parse_args()
+    if args.t:
+        dump_table(args.t)
+    if args.e:
+        test_entry()
