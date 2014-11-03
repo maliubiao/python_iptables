@@ -9,6 +9,7 @@ import io
 import mmap
 import pprint
 
+from collections import OrderedDict
 
 XT_TABLE_MAXNAMELEN = 32 
 IFNAMSIZ = 16
@@ -26,12 +27,20 @@ NUMHOOKS = 5
 
 
 blt_chain_table = {
-        PRE_ROUTING: "prerouting",
-        LOCAL_IN: "input",
-        FORWARD: "forward",
-        LOCAL_OUT: "output",
-        POST_ROUTING: "postrouting"
+        PRE_ROUTING: "PREROUTING",
+        LOCAL_IN: "INPUT",
+        FORWARD: "FORWARD",
+        LOCAL_OUT: "OUTPUT",
+        POST_ROUTING: "POSTROUTING"
         }
+
+blt_order = (
+        "PREROUTING", 
+        "INPUT",
+        "FORWARD",
+        "OUTPUT",
+        "POSTROUTING"
+        )
 
 blt_chain_name = dict([(x[1], x[0]) for x in blt_chain_table.items()])
 
@@ -173,7 +182,7 @@ def generate_struct(d, fmt, default):
 
 #A -> B,  default, generator, parser 
 def parse_chains(info, entries): 
-    chains = {}
+    chains = OrderedDict()
     offsetd = {}
     bltchain = {} 
     jump = []
@@ -224,7 +233,7 @@ def generate_chains(chains):
     fall = [] 
     chain_loc = {}
     buf = []
-    off = 0
+    off = 0 
     for k,v in chains.items(): 
         start = off 
         #非hook, 加头
@@ -247,16 +256,18 @@ def generate_chains(chains):
                     d = generate_entry(v) 
                     #修改
                     v["target"]["payload"] = off + len(d) 
-            pdb.set_trace()
             d = generate_entry(v)
             off += len(d)
-            buf.append(d)
+            buf.append(d) 
+        if not k in blt_chain_name:
+            policy = new_std_entry(NF_REPEAT) 
+            off += len(policy)
+            buf.append(policy)
         #记录chain的始终位置
         chain_loc[k] = {
                 "start": start,
                 "end": off
                 } 
-
     for k, j in jump:    
         #换chain名为其offset
         offset = chain_loc[j["target"]["payload"]]["start"] 
@@ -282,6 +293,17 @@ def new_error_entry(name):
                 }
             }
         }) 
+
+def new_std_entry(std):
+    return generate_entry({
+        "ip": {},
+        "matches": [],
+        "target": {
+            "name": "std",
+            "revision": 0,
+            "payload": std 
+            }
+        })
 
 
 getinfo_fmt = (
@@ -460,8 +482,7 @@ def parse_entry(b):
 
 def generate_matches(matches):
     buf = []
-    for i in matches:
-        pdb.set_trace()
+    for i in matches: 
         generator = match_plugin[i["name"]][1]
         payload = generator(i["payload"])
         plen = len(payload)
@@ -534,8 +555,7 @@ target_default = {
 
 def generate_target(d):
     if d["name"] == "std":
-        generator = target_plugin["std"][1]
-        pdb.set_trace()
+        generator = target_plugin["std"][1] 
         payload = generator(d["payload"])
         del d["name"]
     else:
