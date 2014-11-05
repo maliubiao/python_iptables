@@ -234,6 +234,7 @@ def generate_chains(chains):
     chain_loc = {}
     buf = []
     off = 0 
+    pdb.set_trace()
     for k,v in chains.items(): 
         start = off 
         #非hook, 加头
@@ -274,7 +275,6 @@ def generate_chains(chains):
         j["target"]["payload"] = offset
         #重新生成
         buf[k] = generate_entry(j) 
-
     #添加tail
     tail = new_error_entry(XT_ERROR)
     buf.append(tail)
@@ -635,21 +635,24 @@ def generate_target_reject(d):
     return struct.pack("I", d["reject_with"])
 
 
+log_fmt = (
+        ("level", (TYPE_SIMPLE,  "B")),
+        ("logflags", (TYPE_SIMPLE, "B")),
+        ("prefix", (TYPE_STR, "c", 30)), 
+        )
+
+log_default = {
+        "level": 0, 
+        "logflags": 0,
+        "prefix": 30 * "\x00"
+        }
+
 def parse_target_log(b):
-    level, logflags = struct.unpack("BB", b.read(2))
-    prefix = b.read(30)
-    i = prefix.find("\x00")
-    if i > 0:
-        prefix = prefix[:i]        
-    return {
-            "level": level,
-            "logflags": logflags,
-            "prefix": prefix
-            }
+    return parse_struct(b, log_fmt) 
 
 
 def generate_target_log(d):
-    pass
+    return generate_struct(d, log_fmt, log_default)
 
 
 audit_fmt = (
@@ -1004,6 +1007,7 @@ tproxy_fmt = (
         ("laddr", (TYPE_ARRAY, ">I", 4)),
         ("lport", (TYPE_SIMPLE, ">H"))
         )
+
 
 def parse_target_std(b):
     pass
@@ -2173,30 +2177,12 @@ def ip_to_num(ip):
     return struct.unpack(">I", socket.inet_aton(ip))[0]
 
 
-def test_entry(): 
-    generate_entry({ "ip": { 
-            "dst": ip_to_num("106.186.112.80"),
-            "dmsk": 0xffffffff
-            },
-        "matches": [],
-        "target": {
-            "revision": 0,
-            "name": "std",
-            "payload": {
-                "verdict": NF_DROP
-                }
-            }
-    })
-
-
 if __name__ == "__main__":
     import sys, argparse
     parser = argparse.ArgumentParser(
             description="iptables")
-    parser.add_argument("-t", type=str, help="get by table")
-    parser.add_argument("-e", type=str, help="test entry")
+    parser.add_argument("-t", type=str, help="get by table") 
     args = parser.parse_args()
     if args.t:
         dump_table(args.t)
-    if args.e:
-        test_entry()
+
